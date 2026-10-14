@@ -2,7 +2,7 @@
 # Lance le programme avec le même propriétaire que le dossier music du NAS,
 # pour que les fichiers téléchargés t'appartiennent (pas besoin de connaître ton UID).
 # PUID / PGID dans docker-compose.yml permettent de forcer une valeur.
-echo "yt-music : image version 10"
+echo "yt-music : image version 11"
 if [ "$(id -u)" = "0" ]; then
   # Rend le code lisible quel que soit l'utilisateur (permissions héritées du NAS)
   chmod -R a+rX /app 2>/dev/null

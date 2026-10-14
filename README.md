@@ -24,12 +24,13 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
    ```bash
    git clone https://github.com/Rycrem/musicobot.git yt-music
    ```
-   ou télécharge le zip du repo et copie le dossier sur le NAS.
+   ou télécharge le zip du repo, décompresse-le et copie le dossier sur le NAS (le bot en fera un dépôt git au premier démarrage).
 3. **Adapter `docker-compose.yml`** : le chemin du dossier music du NAS (partie gauche) :
    ```yaml
    volumes:
      - /volume1/partage/music:/music   # ← ton chemin
      - ./config:/config
+     - .:/code                         # ne pas toucher : sert à la mise à jour
    ```
 4. **Lancer** : application Docker d'UGOS → *Projet → Créer* → choisir le dossier `yt-music` (ou `docker compose up -d --build` en SSH).
 5. **Configurer** : au premier lancement, le bot crée `config/bot.conf` à partir de [`config/bot.conf.example`](config/bot.conf.example).
@@ -39,7 +40,9 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
 Journaux attendus au démarrage :
 
 ```
-yt-music : image version 10
+Mise à jour : branche main de https://github.com/Rycrem/musicobot.git
+Mise à jour : déjà à jour (a609f16)
+yt-music : image version 11
 Propriétaire du dossier music : UID=1000 GID=10
 Deno OK (déchiffrement YouTube disponible)
 Connexion à Discord…
@@ -73,26 +76,45 @@ music/
 | `bot.py` | Bot Discord : commandes, file d'attente, suivi en direct, tâches planifiées |
 | `playlist.py` | Moteur de téléchargement (yt-dlp) : reprise, sessions, gestion des blocages |
 | `top.py` | Top du jour et discographies via l'API publique de Deezer, recherche sur YouTube |
-| `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + yt-dlp + discord.py |
+| `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
+| `maj-code.sh` | Mise à jour depuis GitHub à chaque démarrage du conteneur |
+| `requirements.txt` | Versions de yt-dlp et discord.py |
 
 ## Mise à jour
 
-Après un `git pull` (ou le remplacement de fichiers `.py`, `Dockerfile`, `entrypoint.sh`), il faut **reconstruire** l'image :
+**Il suffit de redémarrer le conteneur** (application Docker d'UGOS → *Conteneur* → *Redémarrer*, ou `docker compose restart` en SSH).
+À chaque démarrage, le bot récupère les nouveautés de GitHub (branche `MAJ_BRANCHE` du `docker-compose.yml`) puis lance le code à jour. Les journaux indiquent ce qui a changé :
 
-```bash
-docker compose down
-docker compose build --no-cache
-docker compose up -d
+```
+Mise à jour : branche ugreen de https://github.com/Rycrem/musicobot.git
+Mise à jour : 4d18dda -> 635af0f
+  635af0f Nouvelle commande /radio
 ```
 
-Les versions de yt-dlp, discord.py et Deno sont figées dans le `Dockerfile`. Pour mettre yt-dlp à jour (par exemple quand YouTube renvoie des erreurs), change `YTDLP_VERSION` dans le `Dockerfile`, ou sans le modifier :
+- **Tes fichiers ne sont jamais écrasés** : `config/bot.conf`, `cookies.txt`, `playlists_suivies.json` et les registres `.deja_telecharges*` sont ignorés par git. Si un fichier du projet a été modifié à la main sur le NAS et que la mise à jour le touche, elle est annulée (rien n'est écrasé) et les journaux l'indiquent.
+- **Nouvelle version de yt-dlp ou discord.py** (`requirements.txt`) : installée automatiquement au démarrage.
+- **Changement du `Dockerfile`** (rare : ffmpeg, Deno, Python) : les journaux affichent « reconstruis le projet ». Dans UGOS → *Projet* → *yt-music* → reconstruire, ou en SSH :
+  ```bash
+  docker compose up -d --build
+  ```
+- **Changement du `docker-compose.yml`** : il est mis à jour sur le NAS, mais ne s'applique qu'en relançant le projet (pas seulement le conteneur).
+- Pour désactiver la mise à jour : `MAJ_AUTO: "0"`. Sans accès à GitHub, le bot démarre avec la version déjà présente.
 
-```bash
-docker compose build --no-cache --build-arg YTDLP_VERSION=2026.X.Y   # numéro pris sur pypi.org/project/yt-dlp
-```
+Pour mettre yt-dlp à jour (par exemple quand YouTube renvoie des erreurs), monte sa version dans [`requirements.txt`](requirements.txt) (numéro pris sur [pypi.org/project/yt-dlp](https://pypi.org/project/yt-dlp/)) puis redémarre.
 
-Une modification de `config/bot.conf` ou de `docker-compose.yml` demande seulement un redémarrage.
+### Branche `ugreen` : réglages propres à ton NAS
+
+Le NAS peut suivre une branche dédiée, `ugreen`, pour y mettre ce qui ne concerne que lui (chemin du dossier music, réglages…) sans toucher à `main`.
+
+- Chaque modification de `main` est **fusionnée automatiquement dans `ugreen`** (GitHub Actions, [`fusion-ugreen.yml`](.github/workflows/fusion-ugreen.yml)). La branche est créée au premier passage. En cas de conflit, rien n'est forcé : une issue est ouverte.
+- Sur `ugreen`, dans `docker-compose.yml` : ton chemin music et `MAJ_BRANCHE: ugreen`.
+- Sur le NAS : `git clone -b ugreen https://github.com/Rycrem/musicobot.git yt-music` (ou le zip de la branche `ugreen`).
+
+### Branches du dépôt
+
+- Les modifications passent par une PR depuis une branche `features/<nom-de-la-feature>`.
+- Une branche est supprimée automatiquement une fois sa PR fusionnée ([`nettoyage-branches.yml`](.github/workflows/nettoyage-branches.yml)). Pour nettoyer les anciennes : onglet *Actions* → *Nettoyage des branches fusionnées* → *Run workflow*.
 
 ## Avertissement
 

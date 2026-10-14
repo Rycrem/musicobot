@@ -1,0 +1,63 @@
+# Reporte automatiquement chaque modification de main dans la branche ugreen
+# (branche propre au NAS UGREEN). En cas de conflit, rien n'est forcé : une
+# issue est ouverte pour le régler à la main.
+name: Fusion main -> ugreen
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: fusion-ugreen
+  cancel-in-progress: false
+
+env:
+  CIBLE: ugreen
+
+jobs:
+  fusion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fusionner main dans ugreen
+        id: fusion
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git ls-remote --exit-code --heads origin "$CIBLE" >/dev/null; then
+            echo "Branche $CIBLE absente : création depuis main"
+            git push origin "HEAD:refs/heads/$CIBLE"
+            exit 0
+          fi
+          git checkout -B "$CIBLE" "origin/$CIBLE"
+          if git merge --no-edit origin/main; then
+            git push origin "$CIBLE"
+          else
+            git diff --name-only --diff-filter=U > conflits.txt
+            git merge --abort
+            echo "conflit=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Signaler le conflit
+        if: steps.fusion.outputs.conflit == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          titre="Conflit de fusion main -> $CIBLE"
+          corps=$(printf 'La fusion automatique de `main` dans `%s` est bloquée par un conflit (commit %s).\n\nFichiers en conflit :\n%s\n\nPour régler : `git checkout %s && git merge main`, corrige les fichiers, puis pousse. Les fusions suivantes reprendront automatiquement.' \
+            "$CIBLE" "$GITHUB_SHA" "$(sed 's/^/- /' conflits.txt)" "$CIBLE")
+          num=$(gh issue list --state open --search "\"$titre\" in:title" --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$corps"
+          else
+            gh issue create --title "$titre" --body "$corps"
+          fi
+          exit 1

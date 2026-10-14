@@ -1,18 +1,16 @@
 FROM python:3.12-slim
 
-# ffmpeg pour l'extraction audio / la fusion vidéo
+# ffmpeg pour l'extraction audio / la fusion vidéo, git pour la mise à jour au démarrage
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata git \
  && rm -rf /var/lib/apt/lists/*
 
 # Deno : runtime JavaScript désormais requis par yt-dlp pour YouTube
 COPY --from=denoland/deno:bin-2.9.7 /deno /usr/local/bin/deno
 
-# Versions figées pour des builds reproductibles. Si YouTube casse yt-dlp,
-# monter YTDLP_VERSION (https://pypi.org/project/yt-dlp/) puis reconstruire.
-ARG YTDLP_VERSION=2026.8.19
-ARG DISCORDPY_VERSION=2.7.1
-RUN pip install --no-cache-dir "yt-dlp[default]==${YTDLP_VERSION}" "discord.py==${DISCORDPY_VERSION}"
+# Versions de yt-dlp et discord.py : voir requirements.txt
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Dossier personnel inscriptible par n'importe quel utilisateur : Deno et yt-dlp
 # y mettent leur cache (sinon Deno échoue et YouTube renvoie des erreurs 403)
@@ -28,5 +26,10 @@ RUN sed -i 's/\r$//' entrypoint.sh \
  && chmod 755 /app entrypoint.sh \
  && chmod 644 playlist.py bot.py top.py bot.conf.example
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Copie de référence : maj-code.sh détecte ce qui a changé depuis la construction
+COPY requirements.txt Dockerfile maj-code.sh /usr/local/share/yt-music/
+RUN install -m 755 /usr/local/share/yt-music/maj-code.sh /usr/local/bin/maj-code.sh \
+ && sed -i 's/\r$//' /usr/local/bin/maj-code.sh
+
+ENTRYPOINT ["/usr/local/bin/maj-code.sh"]
 CMD ["python", "bot.py"]
