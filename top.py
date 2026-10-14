@@ -23,6 +23,7 @@ import playlist as dl
 TOPS_DEFAUT = "France:1109890291,USA:1313621735,Monde:3155776842"
 TOPS = [t.split(":", 1) for t in os.environ.get("TOPS", TOPS_DEFAUT).split(",") if ":" in t]
 TOP_NOMBRE = int(os.environ.get("TOP_NOMBRE", "10"))
+DOSSIER_TOP = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_TOP", "Top du jour"))
 NOM_REGISTRE = ".deja_telecharges_deezer.txt"
 REGISTRE = os.path.join(dl.DOSSIER, NOM_REGISTRE)   # un seul registre pour tout le dossier music
 # MusicBrainz : vrai nom et chaîne YouTube des artistes (API publique, 1 requête/s maximum)
@@ -211,7 +212,7 @@ def noter(ids_titres):
             f.write(f"{id_deezer}  {nom}\n")
 
 
-def telecharger_morceaux(titre, morceaux, suivi=None, cle_url="deezer"):
+def telecharger_morceaux(titre, morceaux, suivi=None, cle_url="deezer", categorie=None):
     """Cherche et télécharge chaque (id_deezer, artiste, titre) sur YouTube, en sautant
     ceux déjà notés dans le registre. Renvoie le résumé de dl.telecharger (+ « deja »).
     Les échecs ne sont pas notés : ils seront retentés la fois suivante."""
@@ -230,7 +231,8 @@ def telecharger_morceaux(titre, morceaux, suivi=None, cle_url="deezer"):
     for id_deezer, artiste, t in nouveaux:
         recherche = re.sub(r'["]', "", f"{artiste} - {t}")
         entrees.append({"url": f"ytsearch1:{recherche} audio", "title": f"{artiste} - {t}", "id": None,
-                        "deezer": id_deezer})   # tags et rangement d'après ce morceau Deezer
+                        "deezer": id_deezer,   # tags et rangement d'après ce morceau Deezer
+                        "categorie": categorie})
     resume = dl.telecharger(cle_url, suivi, entrees=entrees, titre=titre,
                             dossier=os.path.join(dl.DOSSIER, dl.nom_dossier(titre)))
 
@@ -261,7 +263,7 @@ def telecharger_top(nom, suivi=None):
     morceaux = classement(ids[nom])
     if not morceaux:
         raise RuntimeError("classement Deezer vide")
-    return telecharger_morceaux(titre, morceaux, suivi, f"top:{nom}")
+    return telecharger_morceaux(titre, morceaux, suivi, f"top:{nom}", categorie=DOSSIER_TOP)
 
 
 # ---------------------------------------------------------------------------

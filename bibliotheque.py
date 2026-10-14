@@ -28,12 +28,16 @@ import playlist as dl
 import top
 
 DOSSIER_NON_CLASSES = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_NON_CLASSES", "Non classés"))
+# Le top du jour garde son dossier (catégorie à part dans « Par dossier »), avec les tags Deezer
+DOSSIER_TOP = top.DOSSIER_TOP
 EXTENSIONS = (".m4a", ".mp3", ".mp4")
 CLE_TAG = "DEEZER_TRACK_ID"   # identifiant Deezer écrit dans les tags : musique déjà rangée
 CLE_MP4 = f"----:com.apple.iTunes:{CLE_TAG}"
 REGISTRES = (".deja_telecharges.txt", top.NOM_REGISTRE)
 # Dossiers jamais parcourus : corbeille et miniatures des NAS, fichiers en cours
 DOSSIERS_IGNORES = {"@eaDir", "#recycle", "#snapshot", "@Recycle", ".Trash-1000"}
+# Ordre de préférence des albums Deezer : l'album d'origine plutôt qu'une compilation
+TYPES_ALBUM = {"album": 0, "ep": 1, "single": 2, "compile": 3}
 # Variantes d'un morceau : une vidéo « Remix » ne doit pas être reconnue comme l'original
 VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustic", "acoustique", "cover"}
 
@@ -70,7 +74,8 @@ def nom_chaine(chaine):
 
 
 def note(candidat, titre_video, texte_titre, texte_artistes, duree):
-    """Note d'un résultat Deezer (plus petit = meilleur), None s'il ne correspond pas."""
+    """Note d'un résultat Deezer (plus petit = meilleur), None s'il ne correspond pas.
+    Les versions d'un même morceau ont la même note : meilleure_version() les départage."""
     titre = base(candidat["title"])
     if not contient(texte_titre, titre) or variantes(candidat["title"]) != variantes(titre_video):
         return None
@@ -80,8 +85,22 @@ def note(candidat, titre_video, texte_titre, texte_artistes, duree):
     artiste_ok = contient(texte_artistes, base(candidat["artist"]["name"]))
     if not artiste_ok and (ecart is None or ecart > 2):
         return None   # artiste absent du titre : il faut au moins la même durée à 2 s près
-    single = base(candidat["album"]["title"]) == titre   # on préfère la version de l'album
-    return (not artiste_ok, single, min(ecart if ecart is not None else 30, 30) // 5)
+    return (not artiste_ok, ecart is not None and ecart > 15)
+
+
+def meilleure_version(versions):
+    """Parmi les versions d'un même morceau (album, single, compilation…) : l'album studio
+    le plus ancien, sinon l'EP, le single, et en dernier recours une compilation."""
+    def rang(c):
+        try:
+            alb = album(c["album"]["id"])
+        except Exception:  # noqa: BLE001 — album illisible : version gardée en dernier
+            return (9, "9999")
+        type_album = TYPES_ALBUM.get(alb.get("record_type"), 2)
+        if base((alb.get("artist") or {}).get("name")) in ("various artists", "artistes divers"):
+            type_album = TYPES_ALBUM["compile"]
+        return (type_album, alb.get("release_date") or "9999")
+    return min(versions[:6], key=rang)
 
 
 def identifier(titre_video, artiste=None, piste=None, chaine=None, duree=None):
@@ -100,7 +119,9 @@ def identifier(titre_video, artiste=None, piste=None, chaine=None, duree=None):
         notes = [(n, i, c) for i, c in enumerate(resultats)
                  if (n := note(c, titre_video, texte_titre, texte_artistes, duree)) is not None]
         if notes:
-            return min(notes, key=lambda x: (x[0], x[1]))[2]
+            meilleure = min(n for n, _, _ in notes)
+            return meilleure_version([c for n, _, c in sorted(notes, key=lambda x: (x[0], x[1]))
+                                      if n == meilleure])
     return None
 
 
@@ -212,7 +233,10 @@ def coupe(texte, n=100):
     return dl.nom_dossier(texte[:n])
 
 
-def chemin_cible(meta, ext):
+def chemin_cible(meta, ext, categorie=None):
+    """music/<Artiste>/<Album>/<NN - Titre>, ou <categorie>/<Artiste - Titre> (top du jour)."""
+    if categorie:
+        return os.path.join(categorie, coupe(f"{meta['artiste']} - {meta['titre']}", 150) + ext)
     numero = (f"{meta['disque']}-{meta['piste']:02d}" if meta["disque"] > 1 else f"{meta['piste']:02d}")
     nom = f"{numero} - {meta['titre']}" if meta["piste"] else meta["titre"]
     return os.path.join(dl.DOSSIER, coupe(meta["artiste_album"]), coupe(meta["album"]), coupe(nom, 150) + ext)
@@ -231,16 +255,17 @@ def deplacer(chemin, cible):
     return True
 
 
-def placer(chemin, meta):
+def placer(chemin, meta, categorie=None):
     """Écrit les tags Deezer puis range le fichier. Renvoie (chemin final, nouveau)."""
     ecrire_tags(chemin, meta)
-    cible = chemin_cible(meta, os.path.splitext(chemin)[1].lower())
+    cible = chemin_cible(meta, os.path.splitext(chemin)[1].lower(), categorie)
     return cible, deplacer(chemin, cible)
 
 
-def ranger_telechargement(chemin, info, deezer_id=None):
+def ranger_telechargement(chemin, info, deezer_id=None, categorie=None):
     """Appelée par playlist.telecharger après chaque musique téléchargée.
-    `deezer_id` : morceau déjà connu (/top, /artiste) ; sinon reconnaissance d'après la vidéo."""
+    `deezer_id` : morceau déjà connu (/top, /artiste) ; sinon reconnaissance d'après la vidéo.
+    `categorie` : dossier à part (top du jour) au lieu de <Artiste>/<Album>."""
     if not deezer_id:
         trouve = identifier(info.get("title") or "", artiste=info.get("artist") or info.get("creator"),
                             piste=info.get("track"), chaine=info.get("channel") or info.get("uploader"),
@@ -252,7 +277,7 @@ def ranger_telechargement(chemin, info, deezer_id=None):
             os.remove(cible)
         deplacer(chemin, cible)
         return {"chemin": cible, "nouveau": True, "classee": False}
-    cible, nouveau = placer(chemin, details(deezer_id))
+    cible, nouveau = placer(chemin, details(deezer_id), categorie)
     return {"chemin": cible, "nouveau": nouveau, "classee": True}
 
 
@@ -330,12 +355,20 @@ def supprimer_dossiers_vides():
 # ---------------------------------------------------------------------------
 # /ranger : toute la bibliothèque
 # ---------------------------------------------------------------------------
+def categorie_de(chemin):
+    """Dossier à part auquel appartient un fichier (top du jour), sinon None."""
+    return DOSSIER_TOP if os.path.dirname(os.path.abspath(chemin)) == os.path.abspath(DOSSIER_TOP) else None
+
+
 def deja_rangee(chemin, infos):
     """Musique déjà rangée par cette version : tag Deezer présent et fichier à sa place
-    (music/<Artiste>/<Album>/<fichier>, hors « Non classés »)."""
+    (music/<Artiste>/<Album>/<fichier> hors « Non classés », ou dans le top du jour)."""
+    if not infos["deezer_id"]:
+        return False
+    if categorie_de(chemin):
+        return True
     relatif = os.path.relpath(chemin, dl.DOSSIER).split(os.sep)
-    return (bool(infos["deezer_id"]) and len(relatif) == 3
-            and os.path.join(dl.DOSSIER, relatif[0]) != DOSSIER_NON_CLASSES)
+    return len(relatif) == 3 and os.path.join(dl.DOSSIER, relatif[0]) != DOSSIER_NON_CLASSES
 
 
 def titre_depuis_nom(chemin):
@@ -378,7 +411,7 @@ def ranger_bibliotheque(suivi=None):
             if not deezer_id:
                 non_reconnues.append(relatif)
                 continue
-            _, nouveau = placer(chemin, details(deezer_id))
+            _, nouveau = placer(chemin, details(deezer_id), categorie_de(chemin))
             rangees += 1
             doublons += not nouveau
         except Exception as e:  # noqa: BLE001 — un fichier illisible n'arrête pas le rangement

@@ -49,7 +49,7 @@ ROBOT_SEUIL = int(os.environ.get("ROBOT_SEUIL", "3"))       # « confirm you're 
 ARCHIVE = os.path.join(DOSSIER, ".deja_telecharges.txt")
 # Téléchargements en cours, avant leur rangement par artiste / album
 DOSSIER_ATTENTE = os.path.join(DOSSIER, ".telechargement")
-# fonction(chemin, info, deezer_id) -> {chemin, nouveau, classee}, appelée après chaque musique
+# fonction(chemin, info, deezer_id, categorie) -> {chemin, nouveau, classee}, appelée après chaque musique
 # téléchargée pour la ranger par artiste / album (définie par bibliotheque.py)
 RANGEMENT = None
 
@@ -377,7 +377,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             if suivi:
                 suivi.maj(etat="Classement par artiste / album (Deezer)")
             try:
-                r = RANGEMENT(info["filepath"], info, courante.get("deezer"))
+                r = RANGEMENT(info["filepath"], info, courante.get("deezer"), courante.get("categorie"))
             except Exception as e:  # noqa: BLE001 — la musique reste téléchargée, /ranger la rattrapera
                 log(f"[{titre}] Rangement impossible de {os.path.basename(info['filepath'])} : {e}")
                 return [], info
@@ -436,7 +436,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             if SESSION_MAX and session_essais >= SESSION_MAX:
                 nouvelle_session(f"préventif, après {SESSION_MAX} musiques")
             nb_erreurs, nb_ok = len(journal.erreurs), len(telechargees)
-            courante["deezer"] = entree.get("deezer")
+            courante.update(deezer=entree.get("deezer"), categorie=entree.get("categorie"))
             try:
                 ydl.extract_info(url_video(entree), download=True)
             except Exception as e:  # noqa: BLE001
