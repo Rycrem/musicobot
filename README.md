@@ -25,6 +25,7 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
    git clone https://github.com/Rycrem/musicobot.git yt-music
    ```
    ou télécharge le zip du repo, décompresse-le et copie le dossier sur le NAS (le bot en fera un dépôt git au premier démarrage).
+   Si tu reprends une ancienne installation, copie seulement tes fichiers (`bot.conf`, `cookies.txt`, `playlists_suivies.json`…) dans le nouveau dossier `config` : ne remplace pas le dossier entier, `config/bot.conf.example` est nécessaire à la construction.
 3. **Adapter `docker-compose.yml`** : le chemin du dossier music du NAS (partie gauche) :
    ```yaml
    volumes:
