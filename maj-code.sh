@@ -30,6 +30,10 @@ if [ ! -d "$CODE/.git" ]; then
     && g fetch -q origin "$BRANCHE" && g reset -q "origin/$BRANCHE" \
     && g branch -q --set-upstream-to="origin/$BRANCHE" \
     || echo "Mise à jour : initialisation du dépôt impossible"
+  # Fichiers du projet absents du dossier (ex. config/bot.conf.example) : on les remet
+  g ls-files -d 2>/dev/null | while IFS= read -r f; do
+    g checkout -q -- "$f" && echo "Mise à jour : fichier manquant remis : $f"
+  done
 fi
 
 g remote set-url origin "$DEPOT" 2>/dev/null || g remote add origin "$DEPOT"
