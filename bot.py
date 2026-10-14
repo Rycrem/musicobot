@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import time
+import urllib.parse
 from dataclasses import dataclass, replace
 
 import discord
@@ -41,7 +42,7 @@ FICHIER_SUIVIES = os.environ.get("FICHIER_SUIVIES", "/config/playlists_suivies.j
 VERIF_HEURES = max(0.25, float(os.environ.get("VERIF_HEURES", "6")))   # vérification auto des playlists suivies
 PAUSE_ROBOT_HEURES = float(os.environ.get("PAUSE_ROBOT_HEURES", "3"))  # pause si YouTube bloque (anti-robot)
 TOP_HEURE = os.environ.get("TOP_HEURE", "21:00").strip()   # heure du top du jour ("" = désactivé)
-EMOJI_ANNULER = "❌"   # réaction qui annule un téléchargement d'artiste
+EMOJI_ANNULER = "❌"   # icône des boutons et options d'annulation
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +133,26 @@ def court(texte, n=80):
 
 
 def nombre_lisible(n):
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f} M".replace(".", ",")
-    if n >= 1_000:
-        return f"{n / 1_000:.1f} k".replace(".", ",")
+    for seuil, unite in ((1_000_000, "M"), (1_000, "k")):
+        if n >= seuil:
+            return f"{n / seuil:.1f}".replace(".0", "").replace(".", ",") + f" {unite}"
     return str(n)
 
 
+def identite_artiste(a):
+    """Vrai nom d'un artiste solo, « Groupe » pour un groupe (d'après MusicBrainz), sinon None."""
+    if a.get("type") == "Group":
+        return "Groupe"
+    vrai = a.get("vrai_nom")
+    if vrai and top.cle_titre(vrai) != top.cle_titre(a["name"]):
+        return vrai
+    return None
+
+
 def details_artiste(a):
-    """« 12 albums · ~140 titres · 1,2 M fans » (ce que Deezer fournit)."""
-    details = [f"{a.get('nb_album', 0)} album(s)"]
+    """« Claire Pommet · 12 albums · ~140 titres · 1,2 M fans »."""
+    details = [identite_artiste(a)] if identite_artiste(a) else []
+    details.append(f"{a.get('nb_album', 0)} album(s)")
     if a.get("nb_titres"):
         details.append(f"~{a['nb_titres']} titres")
     if a.get("nb_fan"):
@@ -192,7 +203,7 @@ class Bot(discord.Client):
         self.salon_top_id = int(sid) if sid.isdigit() else None
         self.prochain_top: float | None = None
         self._top: asyncio.Task | None = None
-        self.annonces: dict[int, Tache] = {}   # id du message d'annonce -> tâche (annulation par ❌)
+        self.annonces: dict[int, Tache] = {}   # id du message d'annonce -> tâche (bouton Annuler)
 
     async def setup_hook(self):
         if self.guild_id:   # commandes disponibles immédiatement sur ce serveur
@@ -283,7 +294,8 @@ class Bot(discord.Client):
         return "Ce téléchargement est déjà terminé."
 
     async def maj_annonce(self, tache, statut, couleur, garder_bouton=False):
-        """Met à jour l'embed public d'une tâche /artiste (statut, couleur)."""
+        """Met à jour la fiche d'une tâche /artiste (statut, couleur). Message caché : Discord
+        n'autorise sa modification que pendant 15 min après la commande."""
         if tache.annonce is None or tache.embed is None:
             return
         tache.embed.color = couleur
@@ -291,22 +303,10 @@ class Bot(discord.Client):
         kw = {} if garder_bouton else {"view": None}
         if not garder_bouton:
             self.annonces.pop(tache.annonce.id, None)
-            tache.embed.set_footer(text=tache.embed.footer.text.split(" · ")[0])
         try:
             await tache.annonce.edit(embed=tache.embed, **kw)
-            if not garder_bouton:
-                await tache.annonce.clear_reaction(EMOJI_ANNULER)
         except discord.HTTPException:
-            pass   # message supprimé, ou pas le droit de retirer les réactions
-
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        if str(payload.emoji) != EMOJI_ANNULER or payload.user_id == self.user.id:
-            return
-        tache = self.annonces.get(payload.message_id)
-        if tache is None or payload.user_id != tache.auteur_id:
-            return   # seule la personne qui a lancé le téléchargement peut l'annuler
-        dl.log(f"Annulation demandée par réaction : {tache.url}")
-        await self.annuler_tache(tache)
+            pass   # message supprimé entre-temps
 
     async def salon_de(self, salon_id):
         if not salon_id:
@@ -612,7 +612,7 @@ NB_PROPOSITIONS = 5   # artistes proposés dans la liste de /artiste
 
 
 def embed_artiste(a, nombre, demandeur):
-    """Annonce publique d'un téléchargement d'artiste, façon Requestrr (photo en grand)."""
+    """Fiche (message caché) d'un téléchargement d'artiste, façon Requestrr (photo en grand)."""
     embed = discord.Embed(title=a["name"], url=a.get("link") or f"https://www.deezer.com/artist/{a['id']}",
                           color=0x5865F2,
                           description=(f"Téléchargement de ses **{nombre}** titres les plus populaires"
@@ -620,14 +620,22 @@ def embed_artiste(a, nombre, demandeur):
     image = a.get("picture_xl") or a.get("picture_big")
     if image:
         embed.set_image(url=image)
+    if identite_artiste(a):
+        embed.add_field(name="Groupe" if a.get("type") == "Group" else "Vrai nom",
+                        value="Oui" if a.get("type") == "Group" else identite_artiste(a))
     embed.add_field(name="Albums", value=str(a.get("nb_album", "—")))
     if a.get("nb_titres"):
         embed.add_field(name="Titres", value=f"~{a['nb_titres']}")
     if a.get("nb_fan"):
         embed.add_field(name="Fans Deezer", value=nombre_lisible(a["nb_fan"]))
+    if a.get("youtube"):
+        embed.add_field(name="YouTube", value=f"[Chaîne YouTube]({a['youtube']})", inline=False)
+    else:   # chaîne inconnue de MusicBrainz : lien de recherche
+        recherche = urllib.parse.quote_plus(a["name"])
+        embed.add_field(name="YouTube", inline=False,
+                        value=f"[Rechercher sur YouTube](https://www.youtube.com/results?search_query={recherche})")
     embed.add_field(name="Statut", value="—", inline=False)   # toujours le dernier champ
-    embed.set_footer(text=f"Demandé par {demandeur} · {EMOJI_ANNULER} pour annuler si ce n'est pas "
-                          "le bon artiste")
+    embed.set_footer(text=f"Demandé par {demandeur}")
     return embed
 
 
@@ -665,7 +673,7 @@ class ChoixArtiste(discord.ui.View):
         embed = embed_artiste(a, self.nombre, inter.user.display_name)
         embed.set_field_at(len(embed.fields) - 1, name="Statut", value="Préparation…", inline=False)
         try:
-            annonce = await inter.followup.send(embed=embed, wait=True)
+            annonce = await inter.followup.send(embed=embed, ephemeral=True, wait=True)
         except discord.HTTPException as e:
             dl.log(f"Annonce de l'artiste impossible : {e}")
             annonce = None
@@ -685,14 +693,11 @@ class ChoixArtiste(discord.ui.View):
         embed.set_field_at(len(embed.fields) - 1, name="Statut", inline=False,
                            value="Téléchargement lancé." if position == 0
                            else f"Dans la file d'attente (position {position}).")
-        try:
-            if annonce.id in self.bot.annonces:   # pas déjà terminé (sinon l'annonce est à jour)
+        if annonce.id in self.bot.annonces:   # pas déjà terminé (sinon l'annonce est à jour)
+            try:
                 await annonce.edit(embed=embed, view=AnnulerTelechargement(self.bot, tache))
-            if annonce.id in self.bot.annonces:
-                await annonce.add_reaction(EMOJI_ANNULER)
-        except discord.HTTPException as e:   # le bouton reste disponible
-            dl.log(f"Réaction {EMOJI_ANNULER} impossible ({e}) : donne au bot le droit "
-                   "« Ajouter des réactions » dans ce salon.")
+            except discord.HTTPException as e:
+                dl.log(f"Mise à jour de l'annonce impossible : {e}")
 
     async def on_timeout(self):
         try:
@@ -779,7 +784,7 @@ def enregistrer_commandes(bot: Bot):
         embed.add_field(name="Télécharger", inline=False, value=(
             "`/add <lien>` — une vidéo ou une playlist YouTube\n"
             "`/artiste <nom> [nombre]` — toute la discographie d'un artiste, "
-            f"ou ses N titres les plus populaires (choix dans une liste, {EMOJI_ANNULER} pour annuler)\n"
+            "ou ses N titres les plus populaires (choix dans une liste, bouton pour annuler)\n"
             "`/top` — le top 10 du jour France, USA et Monde (aussi automatique "
             f"chaque soir{f' à {TOP_HEURE}' if TOP_HEURE else ''})"))
         embed.add_field(name="Suivre l'avancement", inline=False, value=(
