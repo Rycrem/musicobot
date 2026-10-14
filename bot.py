@@ -16,6 +16,7 @@ Bot Discord : télécharge sur le NAS les vidéos / playlists envoyées avec /ad
                (ou seulement ses N titres les plus populaires) : le bot propose
                les artistes trouvés dans une liste, puis annonce le téléchargement
                avec la photo de l'artiste (❌ ou bouton pour l'annuler)
+  /chanson <titre>  télécharge une chanson à partir de son nom (choix dans une liste)
 
 Configuration : /config/bot.conf (voir le fichier modèle).
 Les liens sont traités un par un, dans l'ordre d'arrivée.
