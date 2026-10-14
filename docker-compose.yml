@@ -15,7 +15,7 @@ x-commun: &commun
 
 x-reglages: &reglages
   MAJ_AUTO: "1"              # 1 = récupère les nouveautés GitHub à chaque démarrage ; 0 = désactivé
-  MAJ_BRANCHE: main          # branche suivie (ex. ugreen pour une branche propre à ton NAS)
+  MAJ_BRANCHE: ugreen        # branche suivie (ex. ugreen pour une branche propre à ton NAS)
   FORMAT: m4a                # m4a (rapide) | mp3 | mp4
   SEULEMENT_MA_CHAINE: "0"   # 0 = télécharge toutes les vidéos ; 1 = seulement celles de ta chaîne
   TZ: Europe/Paris
