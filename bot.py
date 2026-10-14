@@ -16,6 +16,7 @@ Bot Discord : télécharge sur le NAS les vidéos / playlists envoyées avec /ad
                (ou seulement ses N titres les plus populaires) : le bot propose
                les artistes trouvés dans une liste, puis annonce le téléchargement
                avec la photo de l'artiste (❌ ou bouton pour l'annuler)
+  /chanson <titre>  télécharge une chanson à partir de son nom, avec ou sans l'artiste (choix dans une liste)
   /ranger      range les musiques déjà présentes par artiste et album (tags Deezer)
 
 Chaque musique téléchargée est rangée dans music/<Artiste>/<Album>/ (voir bibliotheque.py).
