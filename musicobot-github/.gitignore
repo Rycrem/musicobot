@@ -1,0 +1,11 @@
+# Secrets : jamais versionnés
+config/bot.conf
+config/cookies.txt
+
+# Données locales créées par le bot
+config/playlists_suivies.json
+.deja_telecharges*.txt
+
+# Python
+__pycache__/
+*.pyc
