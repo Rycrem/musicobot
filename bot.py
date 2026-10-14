@@ -13,7 +13,9 @@ Bot Discord : télécharge sur le NAS les vidéos / playlists envoyées avec /ad
   /top         télécharge tout de suite le top du jour (France, USA, Monde) ;
                fait aussi automatiquement chaque soir à TOP_HEURE
   /artiste <nom> [nombre]  télécharge toute la discographie d'un artiste
-               (ou seulement ses N titres les plus populaires)
+               (ou seulement ses N titres les plus populaires) : le bot propose
+               les artistes trouvés dans une liste, puis annonce le téléchargement
+               avec la photo de l'artiste (❌ ou bouton pour l'annuler)
 
 Configuration : /config/bot.conf (voir le fichier modèle).
 Les liens sont traités un par un, dans l'ordre d'arrivée.
@@ -25,7 +27,7 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import discord
 from discord import app_commands
@@ -39,6 +41,7 @@ FICHIER_SUIVIES = os.environ.get("FICHIER_SUIVIES", "/config/playlists_suivies.j
 VERIF_HEURES = max(0.25, float(os.environ.get("VERIF_HEURES", "6")))   # vérification auto des playlists suivies
 PAUSE_ROBOT_HEURES = float(os.environ.get("PAUSE_ROBOT_HEURES", "3"))  # pause si YouTube bloque (anti-robot)
 TOP_HEURE = os.environ.get("TOP_HEURE", "21:00").strip()   # heure du top du jour ("" = désactivé)
+EMOJI_ANNULER = "❌"   # réaction qui annule un téléchargement d'artiste
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +131,24 @@ def court(texte, n=80):
     return texte if len(texte) <= n else texte[: n - 1] + "…"
 
 
+def nombre_lisible(n):
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f} M".replace(".", ",")
+    if n >= 1_000:
+        return f"{n / 1_000:.1f} k".replace(".", ",")
+    return str(n)
+
+
+def details_artiste(a):
+    """« 12 albums · ~140 titres · 1,2 M fans » (ce que Deezer fournit)."""
+    details = [f"{a.get('nb_album', 0)} album(s)"]
+    if a.get("nb_titres"):
+        details.append(f"~{a['nb_titres']} titres")
+    if a.get("nb_fan"):
+        details.append(f"{nombre_lisible(a['nb_fan'])} fans")
+    return " · ".join(details)
+
+
 # ---------------------------------------------------------------------------
 # Bot
 # ---------------------------------------------------------------------------
@@ -142,6 +163,8 @@ class Tache:
     action: object = None   # fonction(suivi) à exécuter à la place de dl.telecharger(url)
     inter: object = None    # commande Discord d'origine (réponse cachée possible 15 min)
     t_inter: float = 0.0
+    annonce: object = None  # message public avec la photo de l'artiste (/artiste)
+    embed: object = None    # embed de cette annonce, mis à jour à la fin
 
 
 class Bot(discord.Client):
@@ -168,6 +191,7 @@ class Bot(discord.Client):
         self.salon_top_id = int(sid) if sid.isdigit() else None
         self.prochain_top: float | None = None
         self._top: asyncio.Task | None = None
+        self.annonces: dict[int, Tache] = {}   # id du message d'annonce -> tâche (annulation par ❌)
 
     async def setup_hook(self):
         if self.guild_id:   # commandes disponibles immédiatement sur ce serveur
@@ -225,16 +249,58 @@ class Bot(discord.Client):
         return ([self.en_cours] if self.en_cours else []) + self.attente
 
     async def ajouter_tache(self, url, auteur_id, salon, auto=False, action=None, inter=None):
-        """Ajoute un lien à la file. Renvoie sa position (0 = démarre tout de suite),
-        ou None s'il est déjà en cours ou en attente."""
+        """Ajoute un lien à la file. Renvoie (position, tâche) : position 0 = démarre tout
+        de suite ; (None, None) s'il est déjà en cours ou en attente."""
         taches = self.taches()
         if any(t.url == url for t in taches):
-            return None
+            return None, None
         tache = Tache(next(self.numeros), url, auteur_id, salon, dl.Suivi(url), auto, action,
                       inter, time.time() if inter else 0.0)
         self.attente.append(tache)
         self.reveil.set()
-        return len(taches)
+        return len(taches), tache
+
+    # ---------------- Annulation (/artiste) ----------------
+    async def annuler_tache(self, tache):
+        """Annule une tâche : retirée de la file si elle attend, sinon arrêtée au plus vite
+        (la musique en cours est interrompue). Renvoie un texte pour l'utilisateur."""
+        if tache in self.attente:
+            self.attente.remove(tache)
+            await self.maj_annonce(tache, "Annulé avant le début du téléchargement.", 0xED4245)
+            return "Téléchargement annulé (il n'avait pas encore commencé)."
+        if tache is self.en_cours:
+            if tache.suivi.annule:
+                return "Annulation déjà en cours…"
+            tache.suivi.annuler()
+            await self.maj_annonce(tache, "Annulation en cours…", 0xFEE75C, garder_bouton=True)
+            return "Annulation demandée : le téléchargement s'arrête."
+        return "Ce téléchargement est déjà terminé."
+
+    async def maj_annonce(self, tache, statut, couleur, garder_bouton=False):
+        """Met à jour l'embed public d'une tâche /artiste (statut, couleur)."""
+        if tache.annonce is None or tache.embed is None:
+            return
+        tache.embed.color = couleur
+        tache.embed.set_field_at(len(tache.embed.fields) - 1, name="Statut", value=statut, inline=False)
+        kw = {} if garder_bouton else {"view": None}
+        if not garder_bouton:
+            self.annonces.pop(tache.annonce.id, None)
+            tache.embed.set_footer(text=tache.embed.footer.text.split(" · ")[0])
+        try:
+            await tache.annonce.edit(embed=tache.embed, **kw)
+            if not garder_bouton:
+                await tache.annonce.clear_reaction(EMOJI_ANNULER)
+        except discord.HTTPException:
+            pass   # message supprimé, ou pas le droit de retirer les réactions
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        if str(payload.emoji) != EMOJI_ANNULER or payload.user_id == self.user.id:
+            return
+        tache = self.annonces.get(payload.message_id)
+        if tache is None or payload.user_id != tache.auteur_id:
+            return   # seule la personne qui a lancé le téléchargement peut l'annuler
+        dl.log(f"Annulation demandée par réaction : {tache.url}")
+        await self.annuler_tache(tache)
 
     async def salon_de(self, salon_id):
         if not salon_id:
@@ -253,8 +319,8 @@ class Bot(discord.Client):
         ajoutees = deja = 0
         for p in list(self.suivies):
             cible = salon or await self.salon_de(p.get("salon_id"))
-            pos = await self.ajouter_tache(p["url"], auteur_id or p.get("auteur_id", 0), cible, auto,
-                                           inter=inter)
+            pos, _ = await self.ajouter_tache(p["url"], auteur_id or p.get("auteur_id", 0), cible, auto,
+                                              inter=inter)
             if pos is None:
                 deja += 1
             else:
@@ -284,7 +350,7 @@ class Bot(discord.Client):
         ajoutes = 0
         for nom in top.noms_tops():
             action = (lambda n: (lambda suivi: top.telecharger_top(n, suivi)))(nom)
-            if await self.ajouter_tache(f"top:{nom}", auteur_id, salon, auto, action, inter) is not None:
+            if (await self.ajouter_tache(f"top:{nom}", auteur_id, salon, auto, action, inter))[0] is not None:
                 ajoutes += 1
         dl.log(f"Top du jour ({'auto' if auto else 'forcé'}) : {ajoutes} classement(s) ajouté(s) à la file.")
         return ajoutes
@@ -456,9 +522,10 @@ class Bot(discord.Client):
                     # YouTube bloque l'IP du NAS : on remet le lien en tête de file et on met
                     # tout en pause (les musiques déjà faites seront sautées à la reprise).
                     self.en_cours = None
-                    self.attente.insert(0, Tache(next(self.numeros), tache.url, tache.auteur_id,
-                                                 tache.salon, dl.Suivi(tache.url), tache.auto,
-                                                 tache.action, tache.inter, tache.t_inter))
+                    reprise = replace(tache, numero=next(self.numeros), suivi=dl.Suivi(tache.url))
+                    self.attente.insert(0, reprise)
+                    if tache.annonce is not None:   # le ❌ / bouton visent maintenant la reprise
+                        self.annonces[tache.annonce.id] = reprise
                     self.pause_jusqua = time.time() + PAUSE_ROBOT_HEURES * 3600
                     cookies = "présent mais sans doute expiré" if self.date_cookies() else "absent"
                     texte = (f"YouTube bloque le NAS (« confirme que tu n'es pas un robot ») pendant "
@@ -469,6 +536,16 @@ class Bot(discord.Client):
                              f"Ils reprendront ensuite là où ils se sont arrêtés.")
                     dl.log(f"Blocage anti-robot : file en pause {PAUSE_ROBOT_HEURES:g} h.")
                     await self.prevenir(tache, texte)
+                    await self.maj_annonce(reprise, "En pause : YouTube bloque le NAS, reprise "
+                                           f"<t:{int(self.pause_jusqua)}:R>.", 0xFEE75C,
+                                           garder_bouton=True)
+                    continue
+                if r.get("annule"):
+                    effaces = (" Le dossier de l'artiste, créé par ce téléchargement, a été supprimé."
+                               if r.get("supprime") else
+                               f" {r['telechargees']} musique(s) déjà téléchargée(s) conservée(s).")
+                    msg = f"Annulé : **{court(r['titre'])}**.{effaces}"
+                    await self.maj_annonce(tache, "Annulé." + effaces, 0xED4245)
                     continue
                 # mémorise le titre des playlists suivies (affiché par /suivies)
                 for p in self.suivies:
@@ -494,10 +571,14 @@ class Bot(discord.Client):
                             liste += f"\n… et {len(r['echecs']) - 10} autre(s)"
                         msg += f"\nMusiques en erreur (sautées) :\n{liste}"
                     msg = court(msg, 1990)
+                await self.maj_annonce(
+                    tache, f"Terminé ✅ {r['telechargees']} musique(s) téléchargée(s) · "
+                           f"{deja} déjà présente(s) · {r['erreurs']} en erreur", 0x57F287)
             except Exception as e:  # noqa: BLE001
                 dl.log(f"Échec sur {tache.url} : {e}")
                 qui = "Vérification automatique" if tache.auto else "Erreur"
                 msg = f"{qui} : échec du téléchargement de <{tache.url}> : {court(str(e), 300)}"
+                await self.maj_annonce(tache, f"Échec : {court(str(e), 200)}", 0xED4245)
             finally:
                 self.en_cours = None
             if msg:
@@ -514,6 +595,115 @@ async def repondre_suite(inter, contenu=None, **kw):
     return await inter.followup.send(contenu, ephemeral=True, **kw)
 
 
+NB_PROPOSITIONS = 5   # artistes proposés dans la liste de /artiste
+
+
+def embed_artiste(a, nombre, demandeur):
+    """Annonce publique d'un téléchargement d'artiste, façon Requestrr (photo en grand)."""
+    embed = discord.Embed(title=a["name"], url=a.get("link") or f"https://www.deezer.com/artist/{a['id']}",
+                          color=0x5865F2,
+                          description=(f"Téléchargement de ses **{nombre}** titres les plus populaires"
+                                       if nombre else "Téléchargement de **toute sa discographie**"))
+    image = a.get("picture_xl") or a.get("picture_big")
+    if image:
+        embed.set_image(url=image)
+    embed.add_field(name="Albums", value=str(a.get("nb_album", "—")))
+    if a.get("nb_titres"):
+        embed.add_field(name="Titres", value=f"~{a['nb_titres']}")
+    if a.get("nb_fan"):
+        embed.add_field(name="Fans Deezer", value=nombre_lisible(a["nb_fan"]))
+    embed.add_field(name="Statut", value="—", inline=False)   # toujours le dernier champ
+    embed.set_footer(text=f"Demandé par {demandeur} · {EMOJI_ANNULER} pour annuler si ce n'est pas "
+                          "le bon artiste")
+    return embed
+
+
+class ChoixArtiste(discord.ui.View):
+    """Liste déroulante des artistes trouvés (+ « Annuler la demande »)."""
+
+    def __init__(self, bot, inter, artistes, nombre):
+        super().__init__(timeout=10 * 60)
+        self.bot, self.inter, self.nombre = bot, inter, nombre
+        self.artistes = {str(a["id"]): a for a in artistes}
+        options = [discord.SelectOption(label=court(a["name"], 100), value=str(a["id"]),
+                                        description=court(details_artiste(a), 100))
+                   for a in artistes]
+        options.append(discord.SelectOption(label="Annuler la demande", value="annuler",
+                                            emoji=EMOJI_ANNULER))
+        self.liste = discord.ui.Select(placeholder="Choisis le bon artiste…", options=options)
+        self.liste.callback = self.choisi
+        self.add_item(self.liste)
+
+    async def choisi(self, inter: discord.Interaction):
+        self.stop()
+        valeur = self.liste.values[0]
+        if valeur == "annuler":
+            return await inter.response.edit_message(content="Demande annulée.", view=None)
+        a = self.artistes[valeur]
+        cle = f"artiste:{a['id']}:{self.nombre}"
+        if any(t.url == cle for t in self.bot.taches()):
+            return await inter.response.edit_message(
+                content=f"**{a['name']}** est déjà en cours ou dans la file.", view=None)
+        await inter.response.edit_message(
+            content=f"Artiste choisi : **{a['name']}**. Les musiques déjà téléchargées sont sautées ; "
+                    "`/update` pour suivre l'avancement.", view=None)
+        # L'annonce est publiée avant de lancer le téléchargement : elle peut ainsi être
+        # mise à jour même s'il se termine tout de suite (tout déjà présent).
+        embed = embed_artiste(a, self.nombre, inter.user.display_name)
+        embed.set_field_at(len(embed.fields) - 1, name="Statut", value="Préparation…", inline=False)
+        try:
+            annonce = await inter.followup.send(embed=embed, wait=True)
+        except discord.HTTPException as e:
+            dl.log(f"Annonce de l'artiste impossible : {e}")
+            annonce = None
+        action = lambda suivi: top.telecharger_artiste(a, self.nombre, suivi)  # noqa: E731
+        position, tache = await self.bot.ajouter_tache(cle, inter.user.id, inter.channel,
+                                                       action=action, inter=self.inter)
+        if position is None:   # lancé entre-temps par quelqu'un d'autre
+            if annonce is not None:
+                await annonce.delete()
+            return
+        if annonce is None:
+            return
+        tache.annonce, tache.embed = annonce, embed
+        self.bot.annonces[annonce.id] = tache
+        embed.set_field_at(len(embed.fields) - 1, name="Statut", inline=False,
+                           value="Téléchargement lancé." if position == 0
+                           else f"Dans la file d'attente (position {position}).")
+        try:
+            if annonce.id in self.bot.annonces:   # pas déjà terminé (sinon l'annonce est à jour)
+                await annonce.edit(embed=embed, view=AnnulerTelechargement(self.bot, tache))
+            if annonce.id in self.bot.annonces:
+                await annonce.add_reaction(EMOJI_ANNULER)
+        except discord.HTTPException as e:   # le bouton reste disponible
+            dl.log(f"Réaction {EMOJI_ANNULER} impossible ({e}) : donne au bot le droit "
+                   "« Ajouter des réactions » dans ce salon.")
+
+    async def on_timeout(self):
+        try:
+            await self.inter.edit_original_response(content="Demande expirée : refais `/artiste`.",
+                                                    view=None)
+        except discord.HTTPException:
+            pass
+
+
+class AnnulerTelechargement(discord.ui.View):
+    """Bouton « Annuler le téléchargement » sous l'annonce publique."""
+
+    def __init__(self, bot, tache):
+        super().__init__(timeout=None)
+        self.bot, self.tache = bot, tache
+
+    @discord.ui.button(label="Annuler le téléchargement", style=discord.ButtonStyle.danger,
+                       emoji=EMOJI_ANNULER)
+    async def annuler(self, inter: discord.Interaction, _bouton: discord.ui.Button):
+        if inter.user.id != self.tache.auteur_id:
+            return await repondre(inter, "Seule la personne qui a demandé ce téléchargement peut l'annuler.")
+        # self.tache peut avoir été remplacée (reprise après un blocage YouTube)
+        tache = self.bot.annonces.get(inter.message.id, self.tache)
+        await repondre(inter, await self.bot.annuler_tache(tache))
+
+
 def enregistrer_commandes(bot: Bot):
     @bot.tree.command(name="help", description="Liste des commandes du bot")
     async def aide(inter: discord.Interaction):
@@ -522,7 +712,7 @@ def enregistrer_commandes(bot: Bot):
         embed.add_field(name="Télécharger", inline=False, value=(
             "`/add <lien>` — une vidéo ou une playlist YouTube\n"
             "`/artiste <nom> [nombre]` — toute la discographie d'un artiste, "
-            "ou ses N titres les plus populaires\n"
+            f"ou ses N titres les plus populaires (choix dans une liste, {EMOJI_ANNULER} pour annuler)\n"
             "`/top` — le top 10 du jour France, USA et Monde (aussi automatique "
             f"chaque soir{f' à {TOP_HEURE}' if TOP_HEURE else ''})"))
         embed.add_field(name="Suivre l'avancement", inline=False, value=(
@@ -548,7 +738,7 @@ def enregistrer_commandes(bot: Bot):
         url = url.strip().strip("<>")
         if not re.match(r"^https?://\S+$", url):
             return await repondre(inter, "Ce n'est pas un lien valide.")
-        position = await bot.ajouter_tache(url, inter.user.id, inter.channel, inter=inter)
+        position, _ = await bot.ajouter_tache(url, inter.user.id, inter.channel, inter=inter)
         if position is None:
             return await repondre(inter, "Ce lien est déjà en cours ou dans la file.")
         if position == 0:
@@ -590,7 +780,7 @@ def enregistrer_commandes(bot: Bot):
             return await repondre(
                 inter,                 "Impossible d'enregistrer la playlist : le bot n'a pas le droit d'écrire dans le "
                 "dossier config. Vérifie ses permissions sur le NAS.")
-        position = await bot.ajouter_tache(url, inter.user.id, inter.channel, inter=inter)
+        position, _ = await bot.ajouter_tache(url, inter.user.id, inter.channel, inter=inter)
         texte = (f"Playlist suivie : <{url}>\n"
                  f"Elle sera vérifiée toutes les {VERIF_HEURES:g} h ; les nouvelles musiques seront "
                  f"téléchargées automatiquement et annoncées en message privé.")
@@ -664,28 +854,14 @@ def enregistrer_commandes(bot: Bot):
         nombre = max(0, nombre)
         await inter.response.defer(thinking=True, ephemeral=True)
         try:
-            trouve = await asyncio.to_thread(top.chercher_artiste, nom.strip())
+            trouves = await asyncio.to_thread(top.chercher_artistes, nom.strip(), NB_PROPOSITIONS)
         except Exception as e:  # noqa: BLE001
             return await repondre_suite(inter, f"Recherche impossible sur Deezer : {court(str(e), 200)}")
-        if not trouve:
+        if not trouves:
             return await repondre_suite(inter, f"Aucun artiste trouvé pour « {court(nom, 60)} ».")
-        cle = f"artiste:{trouve['id']}:{nombre}"
-        action = lambda suivi: top.telecharger_artiste(trouve, nombre, suivi)  # noqa: E731
-        position = await bot.ajouter_tache(cle, inter.user.id, inter.channel, action=action, inter=inter)
-        if position is None:
-            return await repondre_suite(inter, f"**{trouve['name']}** est déjà en cours ou dans la file.")
-        details = []
-        if trouve.get("nb_album"):
-            details.append(f"{trouve['nb_album']} album(s)/single(s)")
-        if trouve.get("nb_fan"):
-            details.append(f"{trouve['nb_fan']:,} fans Deezer".replace(",", " "))
         quoi = f"ses {nombre} titres les plus populaires" if nombre else "toute sa discographie"
-        texte = (f"Artiste trouvé : **{trouve['name']}**" + (f" ({', '.join(details)})" if details else "") +
-                 f"\nTéléchargement de {quoi} " +
-                 ("lancé." if position == 0 else f"ajouté à la file (position {position}).") +
-                 "\nLes musiques déjà téléchargées sont sautées. `/update` pour suivre l'avancement.\n"
-                 "Ce n'est pas le bon artiste ? Précise le nom (ex. avec le prénom complet).")
-        await repondre_suite(inter, texte)
+        vue = ChoixArtiste(bot, inter, trouves, nombre)
+        await repondre_suite(inter, f"Quel artiste veux-tu télécharger ({quoi}) ?", view=vue)
 
     @bot.tree.command(name="verifier", description="Vérifier tout de suite les playlists suivies")
     @app_commands.guild_only()

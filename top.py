@@ -10,6 +10,7 @@ Les musiques déjà téléchargées sont sautées grâce à un registre des iden
 import json
 import os
 import re
+import shutil
 import time
 import unicodedata
 import urllib.parse
@@ -61,13 +62,29 @@ def classement(playlist_id, nombre=TOP_NOMBRE):
     return [(str(t["id"]), t["artist"]["name"], t["title"]) for t in donnees.get("data", [])][:nombre]
 
 
-def chercher_artiste(nom):
-    """Renvoie l'artiste Deezer le plus pertinent : {id, name, nb_fan, nb_album} ou None."""
-    res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit=5").get("data", [])
-    if not res:
-        return None
-    exact = [a for a in res if cle_titre(a["name"]) == cle_titre(nom)]
-    return max(exact, key=lambda a: a.get("nb_fan", 0)) if exact else res[0]
+def chercher_artistes(nom, limite=5):
+    """Artistes Deezer correspondant à `nom`, les plus pertinents d'abord : noms exacts
+    (par nombre de fans), puis l'ordre de Deezer. Chaque artiste : {id, name, nb_fan,
+    nb_album, picture_xl, link, …} + « nb_titres » (approximatif, None si inconnu)."""
+    res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit={limite}").get("data", [])
+    exact = sorted((a for a in res if cle_titre(a["name"]) == cle_titre(nom)),
+                   key=lambda a: a.get("nb_fan", 0), reverse=True)
+    artistes = exact + [a for a in res if a not in exact]
+    for a in artistes:
+        try:
+            a["nb_titres"] = nombre_titres(a)
+        except Exception:  # noqa: BLE001 — simple information affichée
+            a["nb_titres"] = None
+    return artistes
+
+
+def nombre_titres(artiste):
+    """Nombre approximatif de titres d'un artiste : somme des pistes de ses albums, EP
+    et singles trouvés par la recherche Deezer (les rééditions sont comptées en double)."""
+    q = urllib.parse.quote(f'artist:"{artiste["name"]}"')
+    albums = api_pages(f"search/album?q={q}&limit=100", maxi=300)
+    return sum(a.get("nb_tracks") or 0 for a in albums
+               if str(a.get("artist", {}).get("id")) == str(artiste["id"]))
 
 
 def cle_titre(titre):
@@ -78,14 +95,17 @@ def cle_titre(titre):
     return re.sub(r"[^a-z0-9]+", " ", t).strip()
 
 
-def discographie(artiste_id, nombre=0):
+def discographie(artiste_id, nombre=0, suivi=None):
     """Musiques d'un artiste : ses `nombre` titres les plus populaires, ou (0) toute sa
-    discographie (albums, EP, singles), sans les doublons de titre."""
+    discographie (albums, EP, singles), sans les doublons de titre.
+    S'arrête (liste vide) si le téléchargement est annulé pendant la lecture."""
     if nombre:
         pistes = api(f"artist/{artiste_id}/top?limit={nombre}").get("data", [])
         return [(str(t["id"]), t["artist"]["name"], t["title"]) for t in pistes]
     morceaux, vus = [], set()
     for album in api_pages(f"artist/{artiste_id}/albums?limit=100"):
+        if suivi and suivi.annule:
+            return []
         for t in api_pages(f"album/{album['id']}/tracks?limit=200"):
             if str(t.get("artist", {}).get("id")) != str(artiste_id):
                 continue   # compilations : on ne garde que les titres de l'artiste
@@ -173,8 +193,21 @@ def telecharger_artiste(artiste, nombre=0, suivi=None):
     titre = artiste["name"] if not nombre else f"{artiste['name']} (top {nombre})"
     if suivi:
         suivi.maj(titre=titre, etat="Lecture de la discographie sur Deezer")
-    morceaux = discographie(artiste["id"], nombre)
+    morceaux = discographie(artiste["id"], nombre, suivi)
+    dossier = os.path.join(DOSSIER_ARTISTES, dl.nom_dossier(artiste["name"]))
+    if suivi and suivi.annule:   # annulé avant le premier téléchargement
+        return {"titre": titre, "dossier": dossier, "total": len(morceaux), "telechargees": 0,
+                "ignorees": 0, "erreurs": 0, "echecs": [], "index_echecs": [], "deja": 0,
+                "annule": True, "supprime": False}
     if not morceaux:
         raise RuntimeError(f"aucune musique trouvée pour {artiste['name']} sur Deezer")
-    dossier = os.path.join(DOSSIER_ARTISTES, dl.nom_dossier(artiste["name"]))
-    return telecharger_morceaux(titre, dossier, morceaux, suivi, f"artiste:{artiste['id']}")
+    nouveau = not os.path.isdir(dossier)
+    resume = telecharger_morceaux(titre, dossier, morceaux, suivi, f"artiste:{artiste['id']}")
+    resume["supprime"] = False
+    if resume.get("annule") and nouveau:
+        # Dossier créé par ce téléchargement (sans doute le mauvais artiste) : on l'efface.
+        # Un dossier qui existait déjà n'est jamais touché.
+        shutil.rmtree(dossier, ignore_errors=True)
+        resume["supprime"] = True
+        dl.log(f"[{titre}] dossier {dossier} supprimé après annulation.")
+    return resume

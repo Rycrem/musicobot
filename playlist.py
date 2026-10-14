@@ -64,6 +64,11 @@ def verifier_dossier():
         sys.exit(f"Le dossier {DOSSIER} n'existe pas : vérifie le volume dans docker-compose.yml")
 
 
+class Annulation(yt_dlp.utils.DownloadCancelled):
+    """Levée dans les hooks yt-dlp quand l'utilisateur annule depuis Discord."""
+    msg = "Téléchargement annulé"
+
+
 # ---------------------------------------------------------------------------
 # Suivi de l'avancement (lu par le bot Discord pendant le téléchargement)
 # ---------------------------------------------------------------------------
@@ -86,6 +91,10 @@ class Suivi:
         self.ignorees = 0
         self.debut = None
         self._fichiers = []       # parties de la vidéo en cours (vidéo + audio en mp4)
+        self.annule = False       # demandé depuis Discord : arrêt au plus vite
+
+    def annuler(self):
+        self.annule = True
 
     def maj(self, **valeurs):
         with self._verrou:
@@ -119,6 +128,8 @@ class Suivi:
 
     # --- hooks yt-dlp ---
     def hook_progression(self, d):
+        if self.annule:   # interrompt la musique en cours de téléchargement
+            raise Annulation()
         if d["status"] not in ("downloading", "finished"):
             return
         with self._verrou:
@@ -221,6 +232,25 @@ def nettoyer_restes(dossier, video_id):
         for f in glob.glob(glob.escape(chemin).replace(glob.escape("*"), "*", 1)):
             try:
                 os.remove(f)
+            except OSError:
+                pass
+
+
+def nettoyer_annulation(dossier):
+    """Après une annulation : supprime les morceaux de fichiers inachevés (.part, .ytdl)
+    et les miniatures orphelines (pochette téléchargée avant la musique)."""
+    medias = {".m4a", ".mp3", ".mp4", ".webm", ".opus"}
+    try:
+        noms = os.listdir(dossier)
+    except OSError:
+        return
+    bases = {os.path.splitext(n)[0] for n in noms if os.path.splitext(n)[1].lower() in medias}
+    for n in noms:
+        base, ext = os.path.splitext(n)
+        ext = ext.lower()
+        if ext in (".part", ".ytdl") or (ext in (".jpg", ".webp", ".png") and base not in bases):
+            try:
+                os.remove(os.path.join(dossier, n))
             except OSError:
                 pass
 
@@ -337,8 +367,12 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         robot = []            # index des échecs « not a bot » consécutifs
         index_ok = set()      # musiques réussies (téléchargées ou déjà présentes)
         bloque = False
+        annule = False
         i = 0
         while i < len(entrees):
+            if suivi and suivi.annule:
+                annule = True
+                break
             entree = entrees[i]
             cle = entree.get("id") or i
             if suivi:
@@ -349,7 +383,15 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             try:
                 ydl.extract_info(url_video(entree), download=True)
             except Exception as e:  # noqa: BLE001
+                if suivi and suivi.annule:
+                    annule = True
+                    break
                 journal.error(f"ERREUR : {e}")
+            if suivi and suivi.annule:   # annulé pendant la conversion : on s'arrête là
+                annule = True
+                if entree.get("id") in telechargees:
+                    index_ok.add(i)
+                break
             if len(telechargees) > nb_ok or len(journal.erreurs) > nb_erreurs:
                 session_essais += 1   # les musiques déjà présentes ne comptent pas
             if len(journal.erreurs) > nb_erreurs and entree.get("id") not in telechargees:
@@ -389,7 +431,9 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
                         if suivi:
                             suivi.maj(etat=f"YouTube bloque : pause, reprise à {reprise:%H:%M}",
                                       vitesse=None, eta=None)
-                        time.sleep(BLOCAGE_PAUSE_MIN * 60)
+                        fin_pause = time.time() + BLOCAGE_PAUSE_MIN * 60
+                        while time.time() < fin_pause and not (suivi and suivi.annule):
+                            time.sleep(2)
                         nouvelle_session("après la pause")
                     else:
                         serie = []   # plus de pauses possibles : on saute simplement
@@ -416,8 +460,11 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
     finally:
         fermer(ydl)
     telechargees.discard(None)
+    if annule:
+        nettoyer_annulation(dossier)
+        log(f"[{titre}] annulé depuis Discord ({len(telechargees)} musique(s) déjà téléchargée(s)).")
     if suivi:
-        suivi.maj(faites=len(entrees), video_frac=0.0, etat="Terminé")
+        suivi.maj(faites=len(entrees), video_frac=0.0, etat="Annulé" if annule else "Terminé")
 
     if echecs:
         log(f"[{titre}] {len(echecs)} musique(s) en erreur, sautée(s) :")
@@ -437,6 +484,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         "echecs": echecs,
         "index_echecs": index_echecs,
         "bloque": bloque,
+        "annule": annule,
         "index_ok": sorted(index_ok),
     }
     log(f"[{titre}] terminé : {resume['telechargees']} téléchargée(s), "
