@@ -82,8 +82,14 @@ Après un `git pull` (ou le remplacement de fichiers `.py`, `Dockerfile`, `entry
 
 ```bash
 docker compose down
-docker compose build --no-cache   # met aussi yt-dlp à jour
+docker compose build --no-cache
 docker compose up -d
+```
+
+Les versions de yt-dlp, discord.py et Deno sont figées dans le `Dockerfile`. Pour mettre yt-dlp à jour (par exemple quand YouTube renvoie des erreurs), change `YTDLP_VERSION` dans le `Dockerfile`, ou sans le modifier :
+
+```bash
+docker compose build --no-cache --build-arg YTDLP_VERSION=2026.X.Y   # numéro pris sur pypi.org/project/yt-dlp
 ```
 
 Une modification de `config/bot.conf` ou de `docker-compose.yml` demande seulement un redémarrage.

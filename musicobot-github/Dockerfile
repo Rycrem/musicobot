@@ -6,9 +6,13 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Deno : runtime JavaScript désormais requis par yt-dlp pour YouTube
-COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+COPY --from=denoland/deno:bin-2.9.7 /deno /usr/local/bin/deno
 
-RUN pip install --no-cache-dir -U "yt-dlp[default]" "discord.py>=2.3"
+# Versions figées pour des builds reproductibles. Si YouTube casse yt-dlp,
+# monter YTDLP_VERSION (https://pypi.org/project/yt-dlp/) puis reconstruire.
+ARG YTDLP_VERSION=2026.8.19
+ARG DISCORDPY_VERSION=2.7.1
+RUN pip install --no-cache-dir "yt-dlp[default]==${YTDLP_VERSION}" "discord.py==${DISCORDPY_VERSION}"
 
 # Dossier personnel inscriptible par n'importe quel utilisateur : Deno et yt-dlp
 # y mettent leur cache (sinon Deno échoue et YouTube renvoie des erreurs 403)
