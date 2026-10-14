@@ -3,6 +3,7 @@ Musiques à partir de Deezer (API publique, aucun compte ni clé nécessaire),
 téléchargées depuis YouTube (1er résultat de recherche « artiste - titre audio ») :
 
   - Top du jour : classements Deezer Charts (France, USA, Monde), N premières musiques
+  - Chanson     : une chanson choisie parmi les résultats d'une recherche
   - Artiste     : toute la discographie d'un artiste (ou ses N titres les plus populaires)
 
 Les musiques déjà téléchargées sont sautées grâce à un registre des identifiants Deezer.
@@ -83,6 +84,20 @@ def chercher_artistes(nom, limite=5):
     except Exception as e:  # noqa: BLE001 — MusicBrainz est facultatif
         dl.log(f"MusicBrainz indisponible ({e}) : liste sans vrai nom ni chaîne YouTube.")
     return artistes
+
+
+def chercher_chansons(recherche, limite=5):
+    """Chansons Deezer correspondant à `recherche` (titre, et éventuellement artiste),
+    dans l'ordre de pertinence de Deezer, sans les doublons (même titre du même artiste
+    sur plusieurs albums). Chaque chanson : {id, title, artist, album, duration, …}."""
+    res = api(f"search/track?q={urllib.parse.quote(recherche)}&limit={limite * 3}").get("data", [])
+    chansons, vues = [], set()
+    for t in res:
+        cle = (str(t.get("artist", {}).get("id")), cle_titre(t["title"]))
+        if cle not in vues:
+            vues.add(cle)
+            chansons.append(t)
+    return chansons[:limite]
 
 
 def nombre_titres(artiste):
@@ -249,6 +264,19 @@ def telecharger_top(nom, suivi=None):
     if not morceaux:
         raise RuntimeError("classement Deezer vide")
     return telecharger_morceaux(titre, DOSSIER_TOP, morceaux, suivi, f"top:{nom}")
+
+
+# ---------------------------------------------------------------------------
+# Chanson seule
+# ---------------------------------------------------------------------------
+def telecharger_chanson(chanson, suivi=None):
+    """`chanson` = dict renvoyé par chercher_chansons. Rangée avec les vidéos seules de /add."""
+    titre = f"{chanson['artist']['name']} - {chanson['title']}"
+    if suivi:
+        suivi.maj(titre=titre)
+    dossier = os.path.join(dl.DOSSIER, dl.DOSSIER_TITRES)
+    morceaux = [(str(chanson["id"]), chanson["artist"]["name"], chanson["title"])]
+    return telecharger_morceaux(titre, dossier, morceaux, suivi, f"chanson:{chanson['id']}")
 
 
 # ---------------------------------------------------------------------------

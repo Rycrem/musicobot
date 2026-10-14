@@ -8,6 +8,7 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
 ## Fonctionnalités
 
 - **`/add <lien>`** : télécharge une vidéo ou une playlist YouTube entière (audio m4a avec titre, artiste et pochette intégrés).
+- **`/chanson <titre>`** : télécharge une chanson à partir de son nom, sans chercher le lien YouTube. Le bot propose les chansons trouvées sur Deezer dans une liste (artiste, album, durée) ; la chanson choisie est rangée dans `Titres/`.
 - **`/artiste <nom> [nombre]`** : toute la discographie d'un artiste (albums, EP, singles, sans doublons), ou ses N titres les plus populaires. Le bot propose d'abord les artistes trouvés sur Deezer dans une liste (vrai nom pour les artistes solo, nombre d'albums, de titres et de fans) ; une fois le bon choisi, il affiche une fiche du téléchargement (visible de toi seul) avec la photo de l'artiste et un lien vers sa chaîne YouTube. Le bouton « Annuler le téléchargement » l'arrête ; si le dossier de l'artiste a été créé par ce téléchargement, il est supprimé. Le vrai nom et la chaîne YouTube viennent de MusicBrainz, quand l'artiste y est référencé.
 - **`/top`** : top 10 du jour France, USA et Monde (classements Deezer), aussi téléchargé automatiquement chaque soir.
 - **`/suivre <lien>`** : suit une playlist ; ses nouvelles musiques sont téléchargées automatiquement (vérification toutes les 6 h).
@@ -65,7 +66,7 @@ Les fichiers de `config/` qui contiennent des secrets ou des données locales so
 ```
 music/
 ├── <Nom de la playlist>/   /add (playlist) et /suivre
-├── Titres/                 /add (vidéo seule)
+├── Titres/                 /add (vidéo seule) et /chanson
 ├── Artistes/<Nom>/         /artiste
 └── Top du jour/            /top et top automatique
 ```
@@ -76,7 +77,7 @@ music/
 |---|---|
 | `bot.py` | Bot Discord : commandes, file d'attente, suivi en direct, tâches planifiées |
 | `playlist.py` | Moteur de téléchargement (yt-dlp) : reprise, sessions, gestion des blocages |
-| `top.py` | Top du jour et discographies via l'API publique de Deezer, recherche sur YouTube |
+| `top.py` | Top du jour, chansons et discographies via l'API publique de Deezer, recherche sur YouTube |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
 | `maj-code.sh` | Mise à jour depuis GitHub à chaque démarrage du conteneur |
