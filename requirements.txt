@@ -1,0 +1,5 @@
+# Versions figées pour des builds reproductibles. Si YouTube casse yt-dlp,
+# monte la version (https://pypi.org/project/yt-dlp/) : elle est installée
+# au prochain redémarrage du conteneur, sans reconstruire l'image.
+yt-dlp[default]==2026.8.19
+discord.py==2.7.1

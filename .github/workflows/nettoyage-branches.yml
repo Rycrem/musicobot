@@ -1,0 +1,40 @@
+# Supprime la branche d'une PR une fois fusionnée (features/…, etc.).
+# Lancement manuel (onglet Actions) : nettoie aussi les anciennes branches
+# déjà fusionnées. main et ugreen ne sont jamais supprimées, ni une branche
+# qui a reçu de nouveaux commits après la fusion.
+name: Nettoyage des branches fusionnées
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  nettoyage:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Supprimer les branches fusionnées
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            printf '%s %s\n' "${{ github.event.pull_request.head.ref }}" "${{ github.event.pull_request.head.sha }}" > branches.txt
+          else
+            gh pr list --state merged --limit 200 --json headRefName,headRefOid,isCrossRepository \
+              --jq '.[] | select(.isCrossRepository | not) | "\(.headRefName) \(.headRefOid)"' > branches.txt
+          fi
+          sort -u branches.txt | while read -r branche sha; do
+            case "$branche" in main|ugreen) continue ;; esac
+            actuel=$(gh api "repos/$GH_REPO/git/ref/heads/$branche" --jq .object.sha 2>/dev/null) || continue
+            if [ "$actuel" != "$sha" ]; then
+              echo "Gardée (nouveaux commits) : $branche"
+            elif gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branche" >/dev/null; then
+              echo "Supprimée : $branche"
+            fi
+          done
