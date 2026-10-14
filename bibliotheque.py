@@ -282,19 +282,30 @@ def migrer_registres():
                     anciens[nom].append(os.path.join(racine, nom))
     for nom, fichiers in anciens.items():
         commun = os.path.join(dl.DOSSIER, nom)
-        lignes = dl.lire_lignes(commun)
-        connues = {l.split()[0] if nom == top.NOM_REGISTRE else l for l in lignes}
-        ajouts = []
-        for f in fichiers:
-            for l in dl.lire_lignes(f):
-                cle = l.split()[0] if nom == top.NOM_REGISTRE else l
-                if cle not in connues:
-                    connues.add(cle)
-                    ajouts.append(l)
-        if ajouts:
-            with open(commun, "a", encoding="utf-8") as sortie:
-                sortie.writelines(l + "\n" for l in ajouts)
-            dl.log(f"Registre {nom} : {len(ajouts)} entrée(s) reprise(s) des anciens dossiers.")
+        try:
+            lignes = dl.lire_lignes(commun)
+            connues = {l.split()[0] if nom == top.NOM_REGISTRE else l for l in lignes}
+            ajouts = []
+            for f in fichiers:
+                try:
+                    anciennes = dl.lire_lignes(f)
+                except OSError as e:   # ancien registre illisible : ses musiques seront retéléchargées
+                    dl.log(f"Registre {f} illisible, ignoré ({e}).")
+                    continue
+                for l in anciennes:
+                    cle = l.split()[0] if nom == top.NOM_REGISTRE else l
+                    if cle not in connues:
+                        connues.add(cle)
+                        ajouts.append(l)
+            if ajouts:
+                with open(commun, "a", encoding="utf-8") as sortie:
+                    sortie.writelines(l + "\n" for l in ajouts)
+                dl.log(f"Registre {nom} : {len(ajouts)} entrée(s) reprise(s) des anciens dossiers.")
+        except OSError as e:
+            # Le bot démarre quand même ; les téléchargements échoueront tant que le registre
+            # commun n'est pas accessible (fichier créé par root par une ancienne version…).
+            dl.log(f"ATTENTION : registre {commun} inaccessible ({e}). Donne au propriétaire du "
+                   "dossier music le droit de le lire et de le modifier (ou supprime-le).")
 
 
 def supprimer_dossiers_vides():
