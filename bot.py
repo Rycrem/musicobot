@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import time
+import urllib.parse
 from dataclasses import dataclass, replace
 
 import discord
@@ -41,7 +42,7 @@ FICHIER_SUIVIES = os.environ.get("FICHIER_SUIVIES", "/config/playlists_suivies.j
 VERIF_HEURES = max(0.25, float(os.environ.get("VERIF_HEURES", "6")))   # vérification auto des playlists suivies
 PAUSE_ROBOT_HEURES = float(os.environ.get("PAUSE_ROBOT_HEURES", "3"))  # pause si YouTube bloque (anti-robot)
 TOP_HEURE = os.environ.get("TOP_HEURE", "21:00").strip()   # heure du top du jour ("" = désactivé)
-EMOJI_ANNULER = "❌"   # réaction qui annule un téléchargement d'artiste
+EMOJI_ANNULER = "❌"   # icône des boutons et options d'annulation
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +133,26 @@ def court(texte, n=80):
 
 
 def nombre_lisible(n):
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f} M".replace(".", ",")
-    if n >= 1_000:
-        return f"{n / 1_000:.1f} k".replace(".", ",")
+    for seuil, unite in ((1_000_000, "M"), (1_000, "k")):
+        if n >= seuil:
+            return f"{n / seuil:.1f}".replace(".0", "").replace(".", ",") + f" {unite}"
     return str(n)
 
 
+def identite_artiste(a):
+    """Vrai nom d'un artiste solo, « Groupe » pour un groupe (d'après MusicBrainz), sinon None."""
+    if a.get("type") == "Group":
+        return "Groupe"
+    vrai = a.get("vrai_nom")
+    if vrai and top.cle_titre(vrai) != top.cle_titre(a["name"]):
+        return vrai
+    return None
+
+
 def details_artiste(a):
-    """« 12 albums · ~140 titres · 1,2 M fans » (ce que Deezer fournit)."""
-    details = [f"{a.get('nb_album', 0)} album(s)"]
+    """« Claire Pommet · 12 albums · ~140 titres · 1,2 M fans »."""
+    details = [identite_artiste(a)] if identite_artiste(a) else []
+    details.append(f"{a.get('nb_album', 0)} album(s)")
     if a.get("nb_titres"):
         details.append(f"~{a['nb_titres']} titres")
     if a.get("nb_fan"):
@@ -164,6 +175,7 @@ class Tache:
     inter: object = None    # commande Discord d'origine (réponse cachée possible 15 min)
     t_inter: float = 0.0
     annonce: object = None  # message public avec la photo de l'artiste (/artiste)
+    nom: str = ""           # nom lisible (artiste, top…) affiché dans /update
     embed: object = None    # embed de cette annonce, mis à jour à la fin
 
 
@@ -191,7 +203,7 @@ class Bot(discord.Client):
         self.salon_top_id = int(sid) if sid.isdigit() else None
         self.prochain_top: float | None = None
         self._top: asyncio.Task | None = None
-        self.annonces: dict[int, Tache] = {}   # id du message d'annonce -> tâche (annulation par ❌)
+        self.annonces: dict[int, Tache] = {}   # id du message d'annonce -> tâche (bouton Annuler)
 
     async def setup_hook(self):
         if self.guild_id:   # commandes disponibles immédiatement sur ce serveur
@@ -248,6 +260,10 @@ class Bot(discord.Client):
     def taches(self):
         return ([self.en_cours] if self.en_cours else []) + self.attente
 
+    @staticmethod
+    def nom_tache(tache):
+        return tache.suivi.photo()["titre"] or tache.nom or tache.url
+
     async def ajouter_tache(self, url, auteur_id, salon, auto=False, action=None, inter=None):
         """Ajoute un lien à la file. Renvoie (position, tâche) : position 0 = démarre tout
         de suite ; (None, None) s'il est déjà en cours ou en attente."""
@@ -272,12 +288,14 @@ class Bot(discord.Client):
             if tache.suivi.annule:
                 return "Annulation déjà en cours…"
             tache.suivi.annuler()
+            tache.suivi.maj(etat="Annulation en cours…")
             await self.maj_annonce(tache, "Annulation en cours…", 0xFEE75C, garder_bouton=True)
             return "Annulation demandée : le téléchargement s'arrête."
         return "Ce téléchargement est déjà terminé."
 
     async def maj_annonce(self, tache, statut, couleur, garder_bouton=False):
-        """Met à jour l'embed public d'une tâche /artiste (statut, couleur)."""
+        """Met à jour la fiche d'une tâche /artiste (statut, couleur). Message caché : Discord
+        n'autorise sa modification que pendant 15 min après la commande."""
         if tache.annonce is None or tache.embed is None:
             return
         tache.embed.color = couleur
@@ -285,22 +303,10 @@ class Bot(discord.Client):
         kw = {} if garder_bouton else {"view": None}
         if not garder_bouton:
             self.annonces.pop(tache.annonce.id, None)
-            tache.embed.set_footer(text=tache.embed.footer.text.split(" · ")[0])
         try:
             await tache.annonce.edit(embed=tache.embed, **kw)
-            if not garder_bouton:
-                await tache.annonce.clear_reaction(EMOJI_ANNULER)
         except discord.HTTPException:
-            pass   # message supprimé, ou pas le droit de retirer les réactions
-
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        if str(payload.emoji) != EMOJI_ANNULER or payload.user_id == self.user.id:
-            return
-        tache = self.annonces.get(payload.message_id)
-        if tache is None or payload.user_id != tache.auteur_id:
-            return   # seule la personne qui a lancé le téléchargement peut l'annuler
-        dl.log(f"Annulation demandée par réaction : {tache.url}")
-        await self.annuler_tache(tache)
+            pass   # message supprimé entre-temps
 
     async def salon_de(self, salon_id):
         if not salon_id:
@@ -350,7 +356,9 @@ class Bot(discord.Client):
         ajoutes = 0
         for nom in top.noms_tops():
             action = (lambda n: (lambda suivi: top.telecharger_top(n, suivi)))(nom)
-            if (await self.ajouter_tache(f"top:{nom}", auteur_id, salon, auto, action, inter))[0] is not None:
+            _, tache = await self.ajouter_tache(f"top:{nom}", auteur_id, salon, auto, action, inter)
+            if tache is not None:
+                tache.nom = f"Top {nom}"
                 ajoutes += 1
         dl.log(f"Top du jour ({'auto' if auto else 'forcé'}) : {ajoutes} classement(s) ajouté(s) à la file.")
         return ajoutes
@@ -420,7 +428,8 @@ class Bot(discord.Client):
         elif not self.pause_jusqua:
             embed.description = "Démarrage du prochain lien…"
         if self.attente:
-            lignes = [f"{i}. <{t.url}>" for i, t in enumerate(self.attente[:5], 1)]
+            lignes = [f"{i}. {court(t.nom, 60)}" if t.nom else f"{i}. <{t.url}>"
+                      for i, t in enumerate(self.attente[:5], 1)]
             if len(self.attente) > 5:
                 lignes.append(f"… et {len(self.attente) - 5} autre(s)")
             embed.add_field(name=f"File d'attente ({len(self.attente)})",
@@ -429,9 +438,10 @@ class Bot(discord.Client):
                               f"{time.strftime('%H:%M:%S')}")
         return embed, True
 
-    async def suivre_en_direct(self, inter):
-        """Met à jour la réponse privée de /update toutes les INTERVALLE_DIRECT secondes.
-        Discord n'autorise à modifier une réponse privée que 15 min : on s'arrête avant."""
+    async def suivre_en_direct(self, inter, vue):
+        """Met à jour la réponse privée de /update (et ses boutons d'annulation) toutes les
+        INTERVALLE_DIRECT secondes. Discord n'autorise à modifier une réponse privée que
+        15 min : on s'arrête avant."""
         fin = time.time() + 14 * 60
         try:
             while True:
@@ -445,18 +455,21 @@ class Bot(discord.Client):
                     embed.set_footer(text="Suivi en direct arrêté (limite Discord de 15 min) : "
                                           "refais /update pour continuer")
                 try:
-                    await inter.edit_original_response(embed=embed)
+                    await inter.edit_original_response(
+                        embed=embed, view=vue.actualiser() if actif and not expire else None)
                 except discord.NotFound:
                     return   # réponse fermée par l'utilisateur
                 except discord.HTTPException as e:
                     dl.log(f"Mise à jour de /update impossible : {e}")
                 if not actif or expire:
+                    vue.stop()
                     return
         except asyncio.CancelledError:
+            vue.stop()
             try:
                 embed, _ = self.construire_embed()
                 embed.set_footer(text="Suivi en direct arrêté : voir le /update plus récent")
-                await inter.edit_original_response(embed=embed)
+                await inter.edit_original_response(embed=embed, view=None)
             except discord.HTTPException:
                 pass
             raise
@@ -599,7 +612,7 @@ NB_PROPOSITIONS = 5   # artistes proposés dans la liste de /artiste
 
 
 def embed_artiste(a, nombre, demandeur):
-    """Annonce publique d'un téléchargement d'artiste, façon Requestrr (photo en grand)."""
+    """Fiche (message caché) d'un téléchargement d'artiste, façon Requestrr (photo en grand)."""
     embed = discord.Embed(title=a["name"], url=a.get("link") or f"https://www.deezer.com/artist/{a['id']}",
                           color=0x5865F2,
                           description=(f"Téléchargement de ses **{nombre}** titres les plus populaires"
@@ -607,14 +620,22 @@ def embed_artiste(a, nombre, demandeur):
     image = a.get("picture_xl") or a.get("picture_big")
     if image:
         embed.set_image(url=image)
+    if identite_artiste(a):
+        embed.add_field(name="Groupe" if a.get("type") == "Group" else "Vrai nom",
+                        value="Oui" if a.get("type") == "Group" else identite_artiste(a))
     embed.add_field(name="Albums", value=str(a.get("nb_album", "—")))
     if a.get("nb_titres"):
         embed.add_field(name="Titres", value=f"~{a['nb_titres']}")
     if a.get("nb_fan"):
         embed.add_field(name="Fans Deezer", value=nombre_lisible(a["nb_fan"]))
+    if a.get("youtube"):
+        embed.add_field(name="YouTube", value=f"[Chaîne YouTube]({a['youtube']})", inline=False)
+    else:   # chaîne inconnue de MusicBrainz : lien de recherche
+        recherche = urllib.parse.quote_plus(a["name"])
+        embed.add_field(name="YouTube", inline=False,
+                        value=f"[Rechercher sur YouTube](https://www.youtube.com/results?search_query={recherche})")
     embed.add_field(name="Statut", value="—", inline=False)   # toujours le dernier champ
-    embed.set_footer(text=f"Demandé par {demandeur} · {EMOJI_ANNULER} pour annuler si ce n'est pas "
-                          "le bon artiste")
+    embed.set_footer(text=f"Demandé par {demandeur}")
     return embed
 
 
@@ -652,13 +673,15 @@ class ChoixArtiste(discord.ui.View):
         embed = embed_artiste(a, self.nombre, inter.user.display_name)
         embed.set_field_at(len(embed.fields) - 1, name="Statut", value="Préparation…", inline=False)
         try:
-            annonce = await inter.followup.send(embed=embed, wait=True)
+            annonce = await inter.followup.send(embed=embed, ephemeral=True, wait=True)
         except discord.HTTPException as e:
             dl.log(f"Annonce de l'artiste impossible : {e}")
             annonce = None
         action = lambda suivi: top.telecharger_artiste(a, self.nombre, suivi)  # noqa: E731
         position, tache = await self.bot.ajouter_tache(cle, inter.user.id, inter.channel,
                                                        action=action, inter=self.inter)
+        if tache is not None:
+            tache.nom = a["name"] + (f" (top {self.nombre})" if self.nombre else "")
         if position is None:   # lancé entre-temps par quelqu'un d'autre
             if annonce is not None:
                 await annonce.delete()
@@ -670,14 +693,11 @@ class ChoixArtiste(discord.ui.View):
         embed.set_field_at(len(embed.fields) - 1, name="Statut", inline=False,
                            value="Téléchargement lancé." if position == 0
                            else f"Dans la file d'attente (position {position}).")
-        try:
-            if annonce.id in self.bot.annonces:   # pas déjà terminé (sinon l'annonce est à jour)
+        if annonce.id in self.bot.annonces:   # pas déjà terminé (sinon l'annonce est à jour)
+            try:
                 await annonce.edit(embed=embed, view=AnnulerTelechargement(self.bot, tache))
-            if annonce.id in self.bot.annonces:
-                await annonce.add_reaction(EMOJI_ANNULER)
-        except discord.HTTPException as e:   # le bouton reste disponible
-            dl.log(f"Réaction {EMOJI_ANNULER} impossible ({e}) : donne au bot le droit "
-                   "« Ajouter des réactions » dans ce salon.")
+            except discord.HTTPException as e:
+                dl.log(f"Mise à jour de l'annonce impossible : {e}")
 
     async def on_timeout(self):
         try:
@@ -704,6 +724,58 @@ class AnnulerTelechargement(discord.ui.View):
         await repondre(inter, await self.bot.annuler_tache(tache))
 
 
+class ControleUpdate(discord.ui.View):
+    """Boutons de /update : annuler le téléchargement en cours, retirer un lien de la file.
+    Toute personne autorisée à utiliser le bot peut annuler (pas seulement le demandeur)."""
+
+    def __init__(self, bot):
+        super().__init__(timeout=15 * 60)
+        self.bot = bot
+        self.cible = None   # tâche en cours au moment de l'affichage
+
+    def actualiser(self):
+        """Reconstruit les éléments selon l'état actuel de la file ; renvoie la vue."""
+        self.clear_items()
+        self.cible = self.bot.en_cours
+        if self.cible is not None and not self.cible.suivi.annule:
+            bouton = discord.ui.Button(style=discord.ButtonStyle.danger, emoji=EMOJI_ANNULER,
+                                       label=court(f"Annuler : {self.bot.nom_tache(self.cible)}", 80))
+            bouton.callback = self.annuler_en_cours
+            self.add_item(bouton)
+        if self.bot.attente:
+            options = [discord.SelectOption(label=court(f"{i}. {self.bot.nom_tache(t)}", 100),
+                                            value=str(t.numero))
+                       for i, t in enumerate(self.bot.attente[:25], 1)]
+            liste = discord.ui.Select(placeholder="Retirer de la file d'attente…", options=options)
+            liste.callback = lambda inter: self.retirer(inter, liste.values[0])
+            self.add_item(liste)
+        return self
+
+    async def apres(self, inter, texte):
+        embed, actif = self.bot.construire_embed()
+        await inter.response.edit_message(embed=embed, view=self.actualiser() if actif else None)
+        await repondre_suite(inter, texte)
+
+    async def annuler_en_cours(self, inter: discord.Interaction):
+        if (erreur := self.bot.refus(inter)):
+            return await repondre(inter, erreur)
+        if self.cible is None or self.cible is not self.bot.en_cours:
+            return await self.apres(inter, "Ce téléchargement est déjà terminé.")
+        dl.log(f"Annulation demandée depuis /update : {self.cible.url}")
+        await self.apres(inter, await self.bot.annuler_tache(self.cible))
+
+    async def retirer(self, inter: discord.Interaction, numero):
+        if (erreur := self.bot.refus(inter)):
+            return await repondre(inter, erreur)
+        tache = next((t for t in self.bot.attente if str(t.numero) == numero), None)
+        if tache is None:
+            return await self.apres(inter, "Ce lien n'est plus dans la file d'attente.")
+        dl.log(f"Retiré de la file depuis /update : {tache.url}")
+        nom = court(self.bot.nom_tache(tache), 80)
+        await self.bot.annuler_tache(tache)
+        await self.apres(inter, f"Retiré de la file d'attente : **{nom}**")
+
+
 def enregistrer_commandes(bot: Bot):
     @bot.tree.command(name="help", description="Liste des commandes du bot")
     async def aide(inter: discord.Interaction):
@@ -712,11 +784,12 @@ def enregistrer_commandes(bot: Bot):
         embed.add_field(name="Télécharger", inline=False, value=(
             "`/add <lien>` — une vidéo ou une playlist YouTube\n"
             "`/artiste <nom> [nombre]` — toute la discographie d'un artiste, "
-            f"ou ses N titres les plus populaires (choix dans une liste, {EMOJI_ANNULER} pour annuler)\n"
+            "ou ses N titres les plus populaires (choix dans une liste, bouton pour annuler)\n"
             "`/top` — le top 10 du jour France, USA et Monde (aussi automatique "
             f"chaque soir{f' à {TOP_HEURE}' if TOP_HEURE else ''})"))
         embed.add_field(name="Suivre l'avancement", inline=False, value=(
-            "`/update` — avancement en direct (pourcentage, musique en cours, file d'attente)"))
+            "`/update` — avancement en direct (pourcentage, musique en cours, file d'attente), "
+            "avec un bouton pour annuler le téléchargement en cours ou retirer un lien de la file"))
         embed.add_field(name="Playlists suivies", inline=False, value=(
             f"`/suivre <lien>` — vérifie la playlist toutes les {VERIF_HEURES:g} h et télécharge "
             "ses nouvelles musiques\n"
@@ -753,13 +826,14 @@ def enregistrer_commandes(bot: Bot):
         if (erreur := bot.refus(inter)):
             return await repondre(inter, erreur)
         embed, actif = bot.construire_embed()
-        await repondre(inter, embed=embed)
         if not actif:
-            return
+            return await repondre(inter, embed=embed)
+        vue = ControleUpdate(bot)
+        await repondre(inter, embed=embed, view=vue.actualiser())
         precedent = bot._directs.get(inter.user.id)
         if precedent and not precedent.done():
             precedent.cancel()
-        bot._directs[inter.user.id] = asyncio.create_task(bot.suivre_en_direct(inter))
+        bot._directs[inter.user.id] = asyncio.create_task(bot.suivre_en_direct(inter, vue))
 
     @bot.tree.command(name="suivre",
                       description="Vérifier une playlist automatiquement et télécharger ses nouvelles musiques")

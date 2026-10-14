@@ -25,6 +25,9 @@ TOP_NOMBRE = int(os.environ.get("TOP_NOMBRE", "10"))
 DOSSIER_TOP = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_TOP", "Top du jour"))
 DOSSIER_ARTISTES = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_ARTISTES", "Artistes"))
 NOM_REGISTRE = ".deja_telecharges_deezer.txt"
+# MusicBrainz : vrai nom et chaîne YouTube des artistes (API publique, 1 requête/s maximum)
+MB_AGENT = "musicobot/1.0 ( https://github.com/Rycrem/musicobot )"
+MB_REQUETES_MAX = 6   # par recherche /artiste, pour garder une réponse rapide
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +78,10 @@ def chercher_artistes(nom, limite=5):
             a["nb_titres"] = nombre_titres(a)
         except Exception:  # noqa: BLE001 — simple information affichée
             a["nb_titres"] = None
+    try:
+        completer_musicbrainz(artistes)
+    except Exception as e:  # noqa: BLE001 — MusicBrainz est facultatif
+        dl.log(f"MusicBrainz indisponible ({e}) : liste sans vrai nom ni chaîne YouTube.")
     return artistes
 
 
@@ -85,6 +92,65 @@ def nombre_titres(artiste):
     albums = api_pages(f"search/album?q={q}&limit=100", maxi=300)
     return sum(a.get("nb_tracks") or 0 for a in albums
                if str(a.get("artist", {}).get("id")) == str(artiste["id"]))
+
+
+# ---------------------------------------------------------------------------
+# MusicBrainz (vrai nom, groupe ou personne, chaîne YouTube)
+# ---------------------------------------------------------------------------
+def mb(chemin):
+    req = urllib.request.Request(f"https://musicbrainz.org/ws/2/{chemin}",
+                                 headers={"User-Agent": MB_AGENT, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
+
+
+def fiche_musicbrainz(mbid):
+    """{type, vrai_nom, youtube, deezer} d'un artiste MusicBrainz."""
+    d = mb(f"artist/{mbid}?inc=url-rels+aliases&fmt=json")
+    vrai_nom = next((al["name"] for al in d.get("aliases") or []
+                     if al.get("type") == "Legal name" and al.get("name")), None)
+    youtube = deezer = None
+    for rel in d.get("relations") or []:
+        url = (rel.get("url") or {}).get("resource") or ""
+        if "youtube.com/" in url and not youtube:
+            youtube = url
+        m = re.search(r"deezer\.com/(?:[a-z]{2}/)?artist/(\d+)", url)
+        if m:
+            deezer = m.group(1)
+    return {"type": d.get("type"), "vrai_nom": vrai_nom, "youtube": youtube, "deezer": deezer}
+
+
+def completer_musicbrainz(artistes):
+    """Ajoute à chaque artiste Deezer « type » (Person, Group…), « vrai_nom » et « youtube »
+    trouvés sur MusicBrainz. Un profil MusicBrainz est relié à l'artiste Deezer par son lien
+    Deezer ; à défaut, s'il n'y a qu'un artiste Deezer de ce nom, par le nom seul."""
+    par_nom = {}
+    for a in artistes:
+        par_nom.setdefault(cle_titre(a["name"]), []).append(a)
+    requetes = 0
+    for cle, groupe in par_nom.items():
+        if requetes >= MB_REQUETES_MAX:
+            break
+        q = urllib.parse.quote(f'artist:"{groupe[0]["name"]}"')
+        res = mb(f"artist/?query={q}&fmt=json&limit=10").get("artists", [])
+        requetes += 1
+        candidats = [x for x in res if cle_titre(x.get("name", "")) == cle and x.get("score", 0) >= 80]
+        sans_lien = []
+        for x in candidats[:len(groupe) + 1]:
+            if requetes >= MB_REQUETES_MAX:
+                break
+            time.sleep(1.1)   # limite de l'API MusicBrainz
+            fiche = fiche_musicbrainz(x["id"])
+            requetes += 1
+            cible = next((a for a in groupe if str(a["id"]) == fiche["deezer"]), None)
+            if cible is not None:
+                cible.update(type=fiche["type"], vrai_nom=fiche["vrai_nom"], youtube=fiche["youtube"])
+            elif not fiche["deezer"]:
+                sans_lien.append(fiche)
+        if len(groupe) == 1 and "type" not in groupe[0] and sans_lien:
+            f = sans_lien[0]
+            groupe[0].update(type=f["type"], vrai_nom=f["vrai_nom"], youtube=f["youtube"])
+        time.sleep(1.1)
 
 
 def cle_titre(titre):
