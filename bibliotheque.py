@@ -45,17 +45,26 @@ VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustic", "acoustique
 # ---------------------------------------------------------------------------
 # Reconnaissance d'une vidéo YouTube sur Deezer
 # ---------------------------------------------------------------------------
+LIGATURES = str.maketrans({"œ": "oe", "Œ": "Oe", "æ": "ae", "Æ": "Ae", "ß": "ss"})
+MOTS_PARASITES = (r"official|officiel|officielle|music|video|clip|audio|lyrics?|paroles|visualizer"
+                  r"|hd|hq|4k|wmv|mp3|mp4|avi")
+# « Artiste - Titre », « Artiste: Titre », « Artiste\Album - Titre »
+SEPARATEURS = r"\s+[-–—]\s+|\s*[:：]\s+|\\"
+
+
 def minuscules(texte):
-    return unicodedata.normalize("NFKD", texte or "").encode("ascii", "ignore").decode().lower()
+    t = (texte or "").translate(LIGATURES)   # « cœur » → « coeur », comme sur Deezer
+    return unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode().lower()
 
 
-def base(texte):
-    """Texte simplifié pour comparer un titre YouTube et un titre Deezer : sans parenthèses,
-    sans « feat. … », sans « Official Video », « Lyrics »…"""
-    t = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", minuscules(texte))
-    t = re.sub(r"\b(feat|ft|featuring)\b.*$", " ", t)
-    t = re.sub(r"\b(official|officiel|officielle|music|video|clip|audio|lyrics?|paroles|visualizer|hd|hq|4k)\b",
-               " ", t)
+def base(texte, parentheses=False):
+    """Texte simplifié pour comparer un titre YouTube et un titre Deezer : sans « feat. … »,
+    sans « Official Video », « Lyrics »…, et sans le contenu des parenthèses (sauf
+    parentheses=True : « Le vaudou (est toujours debout) » → « le vaudou est toujours debout »)."""
+    t = re.sub(r"[\(\[\{]\s*(feat|ft|featuring)\b.*?[\)\]\}]", " ", minuscules(texte))
+    t = re.sub(r"[\(\)\[\]\{\}]", " ", t) if parentheses else re.sub(r"[\(\[\{].*?[\)\]\}]", " ", t)
+    t = re.sub(r"\b(feat|ft|featuring)\b[^-–—(\[]*", " ", t)   # « ft. X » jusqu'au tiret suivant
+    t = re.sub(rf"\b({MOTS_PARASITES})\b", " ", t)
     return " ".join(re.sub(r"[^a-z0-9]+", " ", t).split())
 
 
@@ -67,17 +76,38 @@ def contient(texte, morceau):
     return bool(morceau) and f" {morceau} " in f" {texte} "
 
 
+def titre_correspond(titre_deezer, titre_video):
+    """Le titre Deezer se retrouve-t-il dans le titre de la vidéo ? Avec ou sans le contenu des
+    parenthèses, et sans tenir compte des espaces (« Space Ship » / « Spaceship »)."""
+    t = base(titre_deezer)
+    if contient(base(titre_video), t) or contient(base(titre_video, parentheses=True), t):
+        return True
+    compact = t.replace(" ", "")
+    return len(compact) >= 6 and compact in base(titre_video, parentheses=True).replace(" ", "")
+
+
+def decouper(titre):
+    """« Artiste - Titre » → (« Artiste », « Titre ») ; sans séparateur : (None, titre)."""
+    parties = re.split(SEPARATEURS, titre or "", maxsplit=1)
+    return (parties[0], parties[1]) if len(parties) == 2 else (None, titre)
+
+
+def artiste_principal(texte):
+    """« Sean Paul, Sukuward », « Sean Paul x INNA », « Tal feat. Sean Paul » → le premier."""
+    return re.split(r"\s*(?:,|&|\bx\b|\bfeat\b|\bft\b|\bfeaturing\b)\.?\s*", texte, flags=re.I)[0]
+
+
 def nom_chaine(chaine):
     """« Falling In Reverse - Topic », « FallingInReverseVEVO » → nom de l'artiste."""
     chaine = re.sub(r"\s*-\s*Topic$", "", chaine or "")
     return re.sub(r"VEVO$", "", chaine).strip()
 
 
-def note(candidat, titre_video, texte_titre, texte_artistes, duree):
+def note(candidat, titre_video, texte_artistes, duree):
     """Note d'un résultat Deezer (plus petit = meilleur), None s'il ne correspond pas.
     Les versions d'un même morceau ont la même note : meilleure_version() les départage."""
-    titre = base(candidat["title"])
-    if not contient(texte_titre, titre) or variantes(candidat["title"]) != variantes(titre_video):
+    if (not titre_correspond(candidat["title"], titre_video)
+            or variantes(candidat["title"]) != variantes(titre_video)):
         return None
     ecart = abs(duree - candidat["duration"]) if duree and candidat.get("duration") else None
     if ecart is not None and ecart > 90:   # même un clip avec une longue intro n'en est pas là
@@ -104,20 +134,33 @@ def meilleure_version(versions):
 
 
 def identifier(titre_video, artiste=None, piste=None, chaine=None, duree=None):
-    """Morceau Deezer (résultat de recherche) correspondant à une vidéo, ou None."""
+    """Morceau Deezer (résultat de recherche) correspondant à une vidéo, ou None.
+    `artiste` : artiste connu (YouTube Music, ou dossier Artistes/<nom> pour /ranger)."""
     chaine = nom_chaine(chaine)
-    texte_titre = base(f"{piste or ''} {titre_video}")
-    texte_artistes = base(f"{titre_video} {artiste or ''} {chaine}")
+    texte_video = f"{piste or ''} {titre_video}" if piste else titre_video
+    texte_artistes = base(f"{titre_video} {artiste or ''} {chaine}", parentheses=True)
+    gauche, droite = decouper(titre_video)
+    # Recherches de la plus précise à la plus large : Deezer ne trouve rien si on lui donne
+    # trop de mots (« sean paul sukuward spaceship »), d'où l'artiste principal seul.
     recherches = []
     if piste and artiste:
         recherches.append(f"{artiste} {piste}")
+    if artiste:
+        recherches.append(f"{artiste} {base(droite)}")
+    if gauche:
+        recherches.append(f"{base(artiste_principal(gauche))} {base(droite)}")
+        recherches.append(f"{base(artiste_principal(droite))} {base(gauche)}")   # « Titre - Artiste »
+    # « Artiste\Album [2002] - 15 Titre » : la dernière partie, sans le numéro de piste
+    dernier = re.sub(r"^\d{1,2}\s*[.-]?\s+", "", re.split(SEPARATEURS, titre_video)[-1])
+    if dernier != droite and (artiste or gauche):
+        recherches.append(f"{base(artiste or artiste_principal(gauche))} {base(dernier)}")
     recherches.append(base(titre_video))
     if chaine and not contient(base(titre_video), base(chaine)):
         recherches.append(f"{chaine} {base(titre_video)}")
-    for recherche in dict.fromkeys(r for r in recherches if r.strip()):
+    for recherche in dict.fromkeys(r.strip() for r in recherches if r.strip()):
         resultats = top.api(f"search/track?q={urllib.parse.quote(recherche)}&limit=10").get("data", [])
         notes = [(n, i, c) for i, c in enumerate(resultats)
-                 if (n := note(c, titre_video, texte_titre, texte_artistes, duree)) is not None]
+                 if (n := note(c, texte_video, texte_artistes, duree)) is not None]
         if notes:
             meilleure = min(n for n, _, _ in notes)
             return meilleure_version([c for n, _, c in sorted(notes, key=lambda x: (x[0], x[1]))
@@ -406,7 +449,10 @@ def ranger_bibliotheque(suivi=None):
             deezer_id = infos["deezer_id"]
             if not deezer_id:
                 titre_video = infos["titre"] or titre_depuis_nom(chemin)
-                trouve = identifier(titre_video, chaine=infos["artiste"], duree=infos["duree"])
+                parties = relatif.split(os.sep)
+                artiste = parties[1] if len(parties) > 2 and parties[0] == "Artistes" else None
+                trouve = identifier(titre_video, artiste=artiste, chaine=infos["artiste"],
+                                    duree=infos["duree"])
                 deezer_id = trouve and trouve["id"]
             if not deezer_id:
                 non_reconnues.append(relatif)
