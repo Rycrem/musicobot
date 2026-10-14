@@ -11,6 +11,7 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
 - **`/artiste <nom> [nombre]`** : toute la discographie d'un artiste (albums, EP, singles, sans doublons), ou ses N titres les plus populaires. Le bot propose d'abord les artistes trouvés sur Deezer dans une liste (vrai nom pour les artistes solo, nombre d'albums, de titres et de fans) ; une fois le bon choisi, il affiche une fiche du téléchargement (visible de toi seul) avec la photo de l'artiste et un lien vers sa chaîne YouTube. Le bouton « Annuler le téléchargement » l'arrête ; si le dossier de l'artiste a été créé par ce téléchargement, il est supprimé. Le vrai nom et la chaîne YouTube viennent de MusicBrainz, quand l'artiste y est référencé.
 - **`/top`** : top 10 du jour France, USA et Monde (classements Deezer), aussi téléchargé automatiquement chaque soir.
 - **`/suivre <lien>`** : suit une playlist ; ses nouvelles musiques sont téléchargées automatiquement (vérification toutes les 6 h).
+- **`/ranger`** : range les musiques déjà présentes par artiste et album (voir [Organisation des musiques](#organisation-des-musiques)).
 - **`/update`** : avancement en direct (pourcentage global, musique en cours, vitesse, file d'attente) ; un bouton annule le téléchargement en cours et une liste permet de retirer un lien de la file d'attente.
 - Musiques déjà présentes sautées, erreurs sautées sans arrêter la playlist.
 - Gestion des limites de YouTube : nouvelle session automatique, pause et reprise en cas de blocage anti-robot, prise en charge d'un `cookies.txt`.
@@ -62,13 +63,22 @@ Les fichiers de `config/` qui contiennent des secrets ou des données locales so
 
 ## Organisation des musiques
 
+Toutes les musiques sont rangées par artiste et album, quelle que soit la commande utilisée :
+
 ```
 music/
-├── <Nom de la playlist>/   /add (playlist) et /suivre
-├── Titres/                 /add (vidéo seule)
-├── Artistes/<Nom>/         /artiste
-└── Top du jour/            /top et top automatique
+├── <Artiste>/
+│   └── <Album>/
+│       ├── 01 - <Titre>.m4a
+│       └── 02 - <Titre>.m4a
+└── Non classés/            musiques non reconnues sur Deezer
 ```
+
+- Chaque musique est reconnue sur Deezer : directement pour `/top` et `/artiste`, d'après le titre de la vidéo pour `/add` et les playlists suivies. Ses tags sont réécrits (titre, artiste, artiste de l'album, album, numéro de piste, année, genre, pochette de l'album) : Audio Station, Plex ou Jellyfin les classent correctement.
+- Une musique déjà présente dans la bibliothèque (même artiste, album et titre) n'est pas gardée en double.
+- Une vidéo non reconnue (remix inconnu de Deezer, live, son de niche…) va dans `Non classés/`, avec les informations de YouTube.
+- **`/ranger`** fait la même chose pour les musiques déjà sur le NAS (anciens dossiers `Titres/`, `Top du jour/`, `Artistes/`, playlists…). Les musiques non reconnues restent à leur place et sont listées ; les dossiers vidés sont supprimés. À lancer une fois après la mise à jour, puis quand tu veux.
+- Les registres des musiques déjà téléchargées sont communs à toute la bibliothèque (`music/.deja_telecharges*.txt`) ; ceux des anciens dossiers y sont repris automatiquement au démarrage.
 
 ## Structure du projet
 
@@ -77,6 +87,7 @@ music/
 | `bot.py` | Bot Discord : commandes, file d'attente, suivi en direct, tâches planifiées |
 | `playlist.py` | Moteur de téléchargement (yt-dlp) : reprise, sessions, gestion des blocages |
 | `top.py` | Top du jour et discographies via l'API publique de Deezer, recherche sur YouTube |
+| `bibliotheque.py` | Reconnaissance sur Deezer, tags (mutagen) et rangement par artiste / album, `/ranger` |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
 | `maj-code.sh` | Mise à jour depuis GitHub à chaque démarrage du conteneur |

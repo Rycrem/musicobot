@@ -45,6 +45,14 @@ BLOCAGE_MAX = int(os.environ.get("BLOCAGE_MAX", "6"))       # nombre max de paus
 ROBOT_SEUIL = int(os.environ.get("ROBOT_SEUIL", "3"))       # « confirm you're not a bot » d'affilée = arrêt
 # --------------------------------------------------------------------------
 
+# Vidéos déjà téléchargées (identifiants YouTube) : un seul registre pour tout le dossier music
+ARCHIVE = os.path.join(DOSSIER, ".deja_telecharges.txt")
+# Téléchargements en cours, avant leur rangement par artiste / album
+DOSSIER_ATTENTE = os.path.join(DOSSIER, ".telechargement")
+# fonction(chemin, info, deezer_id) -> {chemin, nouveau, classee}, appelée après chaque musique
+# téléchargée pour la ranger par artiste / album (définie par bibliotheque.py)
+RANGEMENT = None
+
 # Fichiers créés modifiables par le groupe (pratique pour le partage SMB du NAS)
 os.umask(0o002)
 
@@ -57,6 +65,26 @@ def nom_dossier(titre):
     """Nom de dossier valide sous Windows/SMB (le NAS est souvent lu depuis un PC)."""
     titre = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", titre).strip(" .")
     return titre or "Playlist"
+
+
+def lire_lignes(chemin):
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            return [l.rstrip("\n") for l in f if l.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def oublier(chemin, cles, colonne=0):
+    """Retire d'un registre les lignes dont le mot n° `colonne` est dans `cles`
+    (archive yt-dlp « youtube <id> » : colonne 1)."""
+    lignes = lire_lignes(chemin)
+    garder = [l for l in lignes if (l.split(None, 1) + [""])[colonne].strip() not in cles]
+    if len(garder) != len(lignes):
+        tmp = chemin + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(l + "\n" for l in garder)
+        os.replace(tmp, chemin)
 
 
 def verifier_dossier():
@@ -309,6 +337,8 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             entrees = [info]
             dossier = os.path.join(DOSSIER, DOSSIER_TITRES)
             ids_chaine = None   # vidéo seule : pas de filtre
+    if RANGEMENT:   # rangé ensuite par artiste / album
+        dossier = DOSSIER_ATTENTE
     os.makedirs(dossier, exist_ok=True)
     journal.prefixe = f"[{titre[:40]}] "
     if suivi:
@@ -337,18 +367,44 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         if d["status"] == "finished":
             telechargees.add(d.get("info_dict", {}).get("id"))
 
+    # 4) Rangement par artiste / album après chaque musique
+    courante = {}   # entrée en cours de téléchargement (identifiant Deezer éventuel)
+    fichiers = []   # [(chemin, id YouTube)] des nouveaux fichiers de la bibliothèque
+    classement = {"rangees": 0, "non_classees": 0}
+
+    class Rangement(yt_dlp.postprocessor.PostProcessor):
+        def run(self, info):
+            if suivi:
+                suivi.maj(etat="Classement par artiste / album (Deezer)")
+            try:
+                r = RANGEMENT(info["filepath"], info, courante.get("deezer"))
+            except Exception as e:  # noqa: BLE001 — la musique reste téléchargée, /ranger la rattrapera
+                log(f"[{titre}] Rangement impossible de {os.path.basename(info['filepath'])} : {e}")
+                return [], info
+            info["filepath"] = r["chemin"]
+            classement["rangees" if r["classee"] else "non_classees"] += 1
+            if r["nouveau"]:   # pas un doublon d'une musique déjà présente
+                fichiers.append((r["chemin"], info.get("id")))
+            return [], info
+
+    def session():
+        ydl = yt_dlp.YoutubeDL(opts)
+        if RANGEMENT:
+            ydl.add_post_processor(Rangement(), when="after_move")
+        return ydl
+
     opts = options_communes(journal) | options_format() | {
         "outtmpl": os.path.join(dossier, "%(title)s [%(id)s].%(ext)s"),
         "noplaylist": True,
         "match_filter": filtre,
         "windowsfilenames": True,
-        "download_archive": os.path.join(dossier, ".deja_telecharges.txt"),  # reprise
+        "download_archive": ARCHIVE,   # musiques déjà téléchargées, sautées
         "progress_hooks": [note_fin] + ([suivi.hook_progression] if suivi else []),
         "postprocessor_hooks": [suivi.hook_conversion] if suivi else [],
     }
 
     log(f"=== {titre} ({len(entrees)} vidéo(s)) -> {dossier}")
-    ydl = yt_dlp.YoutubeDL(opts)
+    ydl = session()
     session_essais = 0    # musiques tentées avec la session actuelle
     session_neuve = True  # aucune réussite depuis la dernière nouvelle session
 
@@ -356,7 +412,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         nonlocal ydl, session_essais, session_neuve
         log(f"[{titre}] Nouvelle session YouTube ({raison}).")
         fermer(ydl)
-        ydl = yt_dlp.YoutubeDL(opts)
+        ydl = session()
         session_essais, session_neuve = 0, True
 
     try:
@@ -380,6 +436,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             if SESSION_MAX and session_essais >= SESSION_MAX:
                 nouvelle_session(f"préventif, après {SESSION_MAX} musiques")
             nb_erreurs, nb_ok = len(journal.erreurs), len(telechargees)
+            courante["deezer"] = entree.get("deezer")
             try:
                 ydl.extract_info(url_video(entree), download=True)
             except Exception as e:  # noqa: BLE001
@@ -487,6 +544,8 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         "annule": annule,
         "index_ok": sorted(index_ok),
     }
+    if RANGEMENT:
+        resume.update(classement, fichiers=fichiers)
     log(f"[{titre}] terminé : {resume['telechargees']} téléchargée(s), "
         f"{resume['ignorees']} ignorée(s), {resume['erreurs']} erreur(s).")
     return resume
@@ -527,6 +586,11 @@ if __name__ == "__main__":
     if FORMAT not in ("m4a", "mp3", "mp4"):
         sys.exit(f"FORMAT invalide : {FORMAT} (attendu : m4a, mp3 ou mp4)")
     verifier_dossier()
+    # Rangement par artiste / album (ce fichier est lancé directement : bibliotheque.py
+    # renseigne RANGEMENT dans le module « playlist », pas dans celui-ci)
+    import bibliotheque
+    RANGEMENT = bibliotheque.ranger_telechargement
+    bibliotheque.migrer_registres()
 
     while True:
         une_passe()

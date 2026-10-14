@@ -6,11 +6,12 @@ téléchargées depuis YouTube (1er résultat de recherche « artiste - titre au
   - Artiste     : toute la discographie d'un artiste (ou ses N titres les plus populaires)
 
 Les musiques déjà téléchargées sont sautées grâce à un registre des identifiants Deezer.
+Elles sont ensuite rangées par artiste et album (voir bibliotheque.py).
 """
 import json
 import os
 import re
-import shutil
+import threading
 import time
 import unicodedata
 import urllib.parse
@@ -22,9 +23,8 @@ import playlist as dl
 TOPS_DEFAUT = "France:1109890291,USA:1313621735,Monde:3155776842"
 TOPS = [t.split(":", 1) for t in os.environ.get("TOPS", TOPS_DEFAUT).split(",") if ":" in t]
 TOP_NOMBRE = int(os.environ.get("TOP_NOMBRE", "10"))
-DOSSIER_TOP = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_TOP", "Top du jour"))
-DOSSIER_ARTISTES = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_ARTISTES", "Artistes"))
 NOM_REGISTRE = ".deja_telecharges_deezer.txt"
+REGISTRE = os.path.join(dl.DOSSIER, NOM_REGISTRE)   # un seul registre pour tout le dossier music
 # MusicBrainz : vrai nom et chaîne YouTube des artistes (API publique, 1 requête/s maximum)
 MB_AGENT = "musicobot/1.0 ( https://github.com/Rycrem/musicobot )"
 MB_REQUETES_MAX = 6   # par recherche /artiste, pour garder une réponse rapide
@@ -33,10 +33,26 @@ MB_REQUETES_MAX = 6   # par recherche /artiste, pour garder une réponse rapide
 # ---------------------------------------------------------------------------
 # API Deezer
 # ---------------------------------------------------------------------------
+_verrou_api = threading.Lock()
+_derniere_requete = 0.0
+
+
+def patienter():
+    """Au plus ~9 requêtes par seconde : reste sous la limite de Deezer (50 / 5 s),
+    même pendant /ranger qui en enchaîne des milliers."""
+    global _derniere_requete
+    with _verrou_api:
+        attente = _derniere_requete + 0.11 - time.monotonic()
+        if attente > 0:
+            time.sleep(attente)
+        _derniere_requete = time.monotonic()
+
+
 def api(chemin_ou_url):
     url = chemin_ou_url if chemin_ou_url.startswith("http") else f"https://api.deezer.com/{chemin_ou_url}"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     for essai in range(3):
+        patienter()
         with urllib.request.urlopen(req, timeout=30) as r:
             donnees = json.load(r)
         err = donnees.get("error") if isinstance(donnees, dict) else None
@@ -185,26 +201,21 @@ def discographie(artiste_id, nombre=0, suivi=None):
 # ---------------------------------------------------------------------------
 # Téléchargement d'une liste de musiques
 # ---------------------------------------------------------------------------
-def lire_registre(dossier):
-    try:
-        with open(os.path.join(dossier, NOM_REGISTRE), encoding="utf-8") as f:
-            return {ligne.split()[0] for ligne in f if ligne.strip()}
-    except FileNotFoundError:
-        return set()
+def lire_registre():
+    return {ligne.split()[0] for ligne in dl.lire_lignes(REGISTRE)}
 
 
-def noter(dossier, ids_titres):
-    with open(os.path.join(dossier, NOM_REGISTRE), "a", encoding="utf-8") as f:
+def noter(ids_titres):
+    with open(REGISTRE, "a", encoding="utf-8") as f:
         for id_deezer, nom in ids_titres:
             f.write(f"{id_deezer}  {nom}\n")
 
 
-def telecharger_morceaux(titre, dossier, morceaux, suivi=None, cle_url="deezer"):
+def telecharger_morceaux(titre, morceaux, suivi=None, cle_url="deezer"):
     """Cherche et télécharge chaque (id_deezer, artiste, titre) sur YouTube, en sautant
-    ceux déjà notés dans le registre du dossier. Renvoie le résumé de dl.telecharger
-    (+ « deja »). Les échecs ne sont pas notés : ils seront retentés la fois suivante."""
-    os.makedirs(dossier, exist_ok=True)
-    deja_vus = lire_registre(dossier)
+    ceux déjà notés dans le registre. Renvoie le résumé de dl.telecharger (+ « deja »).
+    Les échecs ne sont pas notés : ils seront retentés la fois suivante."""
+    deja_vus = lire_registre()
     nouveaux = [m for m in morceaux if m[0] not in deja_vus]
     deja = len(morceaux) - len(nouveaux)
     dl.log(f"[{titre}] {len(morceaux)} musique(s), {deja} déjà téléchargée(s).")
@@ -212,18 +223,20 @@ def telecharger_morceaux(titre, dossier, morceaux, suivi=None, cle_url="deezer")
     if not nouveaux:
         if suivi:
             suivi.maj(total=1, faites=1, etat="Terminé")
-        return {"titre": titre, "dossier": dossier, "total": len(morceaux),
-                "telechargees": 0, "ignorees": 0, "erreurs": 0, "echecs": [],
-                "index_echecs": [], "deja": deja}
+        return {"titre": titre, "total": len(morceaux), "telechargees": 0, "ignorees": 0,
+                "erreurs": 0, "echecs": [], "index_echecs": [], "deja": deja}
 
     entrees = []
-    for _, artiste, t in nouveaux:
+    for id_deezer, artiste, t in nouveaux:
         recherche = re.sub(r'["]', "", f"{artiste} - {t}")
-        entrees.append({"url": f"ytsearch1:{recherche} audio", "title": f"{artiste} - {t}", "id": None})
-    resume = dl.telecharger(cle_url, suivi, entrees=entrees, titre=titre, dossier=dossier)
+        entrees.append({"url": f"ytsearch1:{recherche} audio", "title": f"{artiste} - {t}", "id": None,
+                        "deezer": id_deezer})   # tags et rangement d'après ce morceau Deezer
+    resume = dl.telecharger(cle_url, suivi, entrees=entrees, titre=titre,
+                            dossier=os.path.join(dl.DOSSIER, dl.nom_dossier(titre)))
 
     reussies = set(resume.get("index_ok", []))   # seules les réussites sont notées
-    noter(dossier, [(m[0], f"{m[1]} - {m[2]}") for j, m in enumerate(nouveaux) if j in reussies])
+    noter([(m[0], f"{m[1]} - {m[2]}") for j, m in enumerate(nouveaux) if j in reussies])
+    resume["ids_deezer"] = [m[0] for j, m in enumerate(nouveaux) if j in reussies]
     resume["total"] = len(morceaux)
     resume["deja"] = deja
     return resume
@@ -248,7 +261,7 @@ def telecharger_top(nom, suivi=None):
     morceaux = classement(ids[nom])
     if not morceaux:
         raise RuntimeError("classement Deezer vide")
-    return telecharger_morceaux(titre, DOSSIER_TOP, morceaux, suivi, f"top:{nom}")
+    return telecharger_morceaux(titre, morceaux, suivi, f"top:{nom}")
 
 
 # ---------------------------------------------------------------------------
@@ -260,20 +273,38 @@ def telecharger_artiste(artiste, nombre=0, suivi=None):
     if suivi:
         suivi.maj(titre=titre, etat="Lecture de la discographie sur Deezer")
     morceaux = discographie(artiste["id"], nombre, suivi)
-    dossier = os.path.join(DOSSIER_ARTISTES, dl.nom_dossier(artiste["name"]))
     if suivi and suivi.annule:   # annulé avant le premier téléchargement
-        return {"titre": titre, "dossier": dossier, "total": len(morceaux), "telechargees": 0,
+        return {"titre": titre, "total": len(morceaux), "telechargees": 0,
                 "ignorees": 0, "erreurs": 0, "echecs": [], "index_echecs": [], "deja": 0,
                 "annule": True, "supprime": False}
     if not morceaux:
         raise RuntimeError(f"aucune musique trouvée pour {artiste['name']} sur Deezer")
-    nouveau = not os.path.isdir(dossier)
-    resume = telecharger_morceaux(titre, dossier, morceaux, suivi, f"artiste:{artiste['id']}")
+    nouveau = not os.path.isdir(os.path.join(dl.DOSSIER, dl.nom_dossier(artiste["name"])))
+    resume = telecharger_morceaux(titre, morceaux, suivi, f"artiste:{artiste['id']}")
     resume["supprime"] = False
     if resume.get("annule") and nouveau:
-        # Dossier créé par ce téléchargement (sans doute le mauvais artiste) : on l'efface.
-        # Un dossier qui existait déjà n'est jamais touché.
-        shutil.rmtree(dossier, ignore_errors=True)
+        # Artiste absent de la bibliothèque avant ce téléchargement (sans doute le mauvais) :
+        # on efface les musiques qu'il a ajoutées et on les retire des registres. Un artiste
+        # qui était déjà là n'est jamais touché.
+        supprimer_fichiers([f for f, _ in resume.get("fichiers", [])])
+        dl.oublier(REGISTRE, set(resume["ids_deezer"]))
+        dl.oublier(dl.ARCHIVE, {v for _, v in resume.get("fichiers", []) if v}, colonne=1)
         resume["supprime"] = True
-        dl.log(f"[{titre}] dossier {dossier} supprimé après annulation.")
+        dl.log(f"[{titre}] {len(resume.get('fichiers', []))} musique(s) supprimée(s) après annulation.")
     return resume
+
+
+def supprimer_fichiers(chemins):
+    """Supprime des musiques, puis leurs dossiers album / artiste s'ils sont devenus vides."""
+    for chemin in chemins:
+        try:
+            os.remove(chemin)
+        except OSError:
+            continue
+        dossier = os.path.dirname(chemin)
+        while os.path.abspath(dossier) != os.path.abspath(dl.DOSSIER):
+            try:
+                os.rmdir(dossier)   # échoue (et on s'arrête) si le dossier n'est pas vide
+            except OSError:
+                break
+            dossier = os.path.dirname(dossier)

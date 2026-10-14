@@ -16,6 +16,9 @@ Bot Discord : télécharge sur le NAS les vidéos / playlists envoyées avec /ad
                (ou seulement ses N titres les plus populaires) : le bot propose
                les artistes trouvés dans une liste, puis annonce le téléchargement
                avec la photo de l'artiste (❌ ou bouton pour l'annuler)
+  /ranger      range les musiques déjà présentes par artiste et album (tags Deezer)
+
+Chaque musique téléchargée est rangée dans music/<Artiste>/<Album>/ (voir bibliotheque.py).
 
 Configuration : /config/bot.conf (voir le fichier modèle).
 Les liens sont traités un par un, dans l'ordre d'arrivée.
@@ -33,6 +36,7 @@ from dataclasses import dataclass, replace
 import discord
 from discord import app_commands
 
+import bibliotheque   # noqa: F401 — range chaque musique téléchargée par artiste / album
 import playlist as dl
 import top
 
@@ -553,8 +557,11 @@ class Bot(discord.Client):
                                            f"<t:{int(self.pause_jusqua)}:R>.", 0xFEE75C,
                                            garder_bouton=True)
                     continue
+                if "message" in r:   # /ranger : résumé déjà rédigé
+                    await self.prevenir(tache, r["message"])
+                    continue
                 if r.get("annule"):
-                    effaces = (" Le dossier de l'artiste, créé par ce téléchargement, a été supprimé."
+                    effaces = (" Les musiques ajoutées par ce téléchargement ont été supprimées."
                                if r.get("supprime") else
                                f" {r['telechargees']} musique(s) déjà téléchargée(s) conservée(s).")
                     msg = f"Annulé : **{court(r['titre'])}**.{effaces}"
@@ -576,8 +583,10 @@ class Bot(discord.Client):
                              f"Terminé : **{court(r['titre'])}** en {ecoule}")
                     msg = (f"{debut}\n"
                            f"{r['telechargees']} musique(s) téléchargée(s) · {deja} déjà présente(s) · "
-                           f"{r['erreurs']} en erreur · {r['ignorees']} ignorée(s)\n"
-                           f"Dossier : `{os.path.relpath(r['dossier'], dl.DOSSIER)}`")
+                           f"{r['erreurs']} en erreur · {r['ignorees']} ignorée(s)")
+                    if r.get("non_classees"):
+                        msg += (f"\n{r['non_classees']} musique(s) non reconnue(s) sur Deezer, rangée(s) dans "
+                                f"`{os.path.relpath(bibliotheque.DOSSIER_NON_CLASSES, dl.DOSSIER)}`")
                     if r["echecs"]:
                         liste = "\n".join(f"- {court(t, 70)}" for t in r["echecs"][:10])
                         if len(r["echecs"]) > 10:
@@ -796,6 +805,9 @@ def enregistrer_commandes(bot: Bot):
             "`/suivies` — liste des playlists suivies et prochaines vérifications\n"
             "`/retirer <numéro>` — arrête de suivre une playlist (numéro de `/suivies`)\n"
             "`/verifier` — vérifie tout de suite les playlists suivies"))
+        embed.add_field(name="Bibliothèque", inline=False, value=(
+            "Chaque musique est rangée par artiste et album, avec les tags et la pochette de Deezer.\n"
+            "`/ranger` — range de la même façon les musiques déjà présentes sur le NAS"))
         embed.add_field(name="Si YouTube bloque", inline=False, value=(
             "Les téléchargements se mettent en pause. Dépose un fichier `cookies.txt` "
             "dans le dossier config du NAS : ils reprennent automatiquement."))
@@ -937,6 +949,22 @@ def enregistrer_commandes(bot: Bot):
         vue = ChoixArtiste(bot, inter, trouves, nombre)
         await repondre_suite(inter, f"Quel artiste veux-tu télécharger ({quoi}) ?", view=vue)
 
+    @bot.tree.command(name="ranger", description="Ranger les musiques déjà présentes par artiste et album")
+    @app_commands.guild_only()
+    async def ranger(inter: discord.Interaction):
+        if (erreur := bot.refus(inter)):
+            return await repondre(inter, erreur)
+        position, tache = await bot.ajouter_tache("ranger:bibliotheque", inter.user.id, inter.channel,
+                                                  action=bibliotheque.ranger_bibliotheque, inter=inter)
+        if position is None:
+            return await repondre(inter, "Le rangement est déjà en cours ou dans la file.")
+        tache.nom = "Rangement de la bibliothèque"
+        texte = ("Rangement lancé : chaque musique est reconnue sur Deezer, retaguée (artiste, album, "
+                 "pochette…) puis rangée dans `<Artiste>/<Album>/`. Les musiques non reconnues restent "
+                 "à leur place. Ça peut prendre du temps sur une grosse bibliothèque."
+                 if position == 0 else f"Rangement ajouté à la file (position {position}).")
+        await repondre(inter, texte + "\nUtilise `/update` pour suivre l'avancement.")
+
     @bot.tree.command(name="verifier", description="Vérifier tout de suite les playlists suivies")
     @app_commands.guild_only()
     async def verifier(inter: discord.Interaction):
@@ -956,6 +984,7 @@ def enregistrer_commandes(bot: Bot):
 
 if __name__ == "__main__":
     dl.verifier_dossier()
+    bibliotheque.migrer_registres()
     configuration = attendre_config()
     bot = Bot(configuration)
     enregistrer_commandes(bot)
