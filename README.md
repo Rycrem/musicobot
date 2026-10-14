@@ -22,7 +22,7 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
    Invite-le avec *OAuth2 → URL Generator* : scopes `bot` + `applications.commands`, permissions *Send Messages* et *Embed Links*.
 2. **Récupérer le projet** sur le NAS (dans un dossier, par ex. `docker/yt-music`) :
    ```bash
-   git clone <url-de-ce-repo> yt-music
+   git clone https://github.com/Rycrem/musicobot.git yt-music
    ```
    ou télécharge le zip du repo et copie le dossier sur le NAS.
 3. **Adapter `docker-compose.yml`** : le chemin du dossier music du NAS (partie gauche) :
