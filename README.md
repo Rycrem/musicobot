@@ -11,7 +11,7 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
 - **`/artiste <nom> [nombre]`** : toute la discographie d'un artiste (albums, EP, singles, sans doublons), ou ses N titres les plus populaires. Le bot propose d'abord les artistes trouvés sur Deezer dans une liste (nombre d'albums, de titres et de fans) ; une fois le bon choisi, il annonce le téléchargement dans le salon avec la photo de l'artiste. Un clic sur la réaction ❌ (ou le bouton « Annuler le téléchargement ») l'arrête ; si le dossier de l'artiste a été créé par ce téléchargement, il est supprimé. Le bot doit avoir le droit « Ajouter des réactions » dans le salon.
 - **`/top`** : top 10 du jour France, USA et Monde (classements Deezer), aussi téléchargé automatiquement chaque soir.
 - **`/suivre <lien>`** : suit une playlist ; ses nouvelles musiques sont téléchargées automatiquement (vérification toutes les 6 h).
-- **`/update`** : avancement en direct (pourcentage global, musique en cours, vitesse, file d'attente).
+- **`/update`** : avancement en direct (pourcentage global, musique en cours, vitesse, file d'attente) ; un bouton annule le téléchargement en cours et une liste permet de retirer un lien de la file d'attente.
 - Musiques déjà présentes sautées, erreurs sautées sans arrêter la playlist.
 - Gestion des limites de YouTube : nouvelle session automatique, pause et reprise en cas de blocage anti-robot, prise en charge d'un `cookies.txt`.
 - Discret : toutes les commandes et réponses ne sont visibles que par la personne qui les utilise.
