@@ -1,0 +1,29 @@
+# ----------------------------------------------------------------------
+# MODÈLE de configuration du bot Discord.
+# Au premier lancement, le bot le copie en config/bot.conf : remplis ce bot.conf
+# (jamais publié sur GitHub), puis redémarre le conteneur après chaque modification.
+# Mode développeur Discord : Paramètres > Avancés > Mode développeur, puis clic droit
+# > "Copier l'identifiant" pour obtenir les ID.
+# ----------------------------------------------------------------------
+
+# Token du bot : https://discord.com/developers/applications > ton appli > Bot > Reset Token
+# Ne le partage jamais.
+DISCORD_TOKEN=
+
+# ID de ton serveur Discord : les commandes y apparaissent immédiatement.
+# Vide = commandes globales (peuvent mettre jusqu'à 1 h à apparaître).
+GUILD_ID=
+
+# Qui peut utiliser les commandes du bot :
+#   *                      = tout le monde sur le serveur (aucune restriction)
+#   ID séparés par virgule = seulement ces utilisateurs
+#   vide                   = seulement le propriétaire du serveur
+UTILISATEURS_AUTORISES=
+
+# ID des salons où le bot accepte les commandes, séparés par des virgules.
+# Vide = tous les salons.
+SALONS_AUTORISES=
+
+# ID du salon où annoncer le top du jour (nouvelles musiques téléchargées chaque soir).
+# Vide = aucune annonce pour le top du jour automatique.
+SALON_TOP=

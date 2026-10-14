@@ -1,0 +1,48 @@
+x-commun: &commun
+  build: .
+  image: yt-music:latest
+  pull_policy: build         # image construite sur le NAS, jamais téléchargée
+  # Les fichiers prennent automatiquement le propriétaire du dossier music
+  # (visible dans les journaux du conteneur). Pour forcer une valeur, ajoute
+  # PUID / PGID dans environment, ex. PUID: "1000" et PGID: "10".
+  volumes:
+    # À ADAPTER : chemin de ton dossier music sur le NAS
+    - /volume1/partage/music:/music
+    # Dossier contenant bot.conf, playlists.txt (et cookies.txt si besoin)
+    - ./config:/config
+
+x-reglages: &reglages
+  FORMAT: m4a                # m4a (rapide) | mp3 | mp4
+  SEULEMENT_MA_CHAINE: "0"   # 0 = télécharge toutes les vidéos ; 1 = seulement celles de ta chaîne
+  TZ: Europe/Paris
+  PAUSE_REQUETES: "0"        # pause en secondes entre les requêtes YouTube (monte à 1 si YouTube bloque)
+  PAUSE_VIDEOS: "0"          # pause (s) avant chaque musique (0 = aucune)
+  SESSION_MAX: "300"         # nouvelle session YouTube toutes les 300 musiques
+  BLOCAGE_PAUSE_MIN: "10"    # si bloqué malgré une nouvelle session : pause de 10 min
+
+services:
+  # Bot Discord : /add <url> et /update — tourne en permanence
+  bot:
+    <<: *commun
+    container_name: yt-music-bot
+    command: python bot.py
+    environment:
+      <<: *reglages
+      VERIF_HEURES: "6"        # vérification auto des playlists suivies (/suivre) toutes les 6 h
+      TOP_HEURE: "21:00"       # top 10 du jour France / USA / Monde chaque soir ("" = désactivé)
+      TOP_NOMBRE: "10"         # nombre de musiques par classement
+      PAUSE_ROBOT_HEURES: "3"  # si YouTube bloque (« pas un robot ») : pause, ou reprise dès l'ajout de config/cookies.txt
+    restart: unless-stopped
+
+  # (Optionnel) téléchargement des playlists listées dans config/playlists.txt.
+  # Ne démarre pas avec le projet ; en SSH : docker compose run --rm playlists
+  playlists:
+    <<: *commun
+    container_name: yt-music-playlists
+    command: python playlist.py
+    profiles: ["manuel"]
+    environment:
+      <<: *reglages
+      PLAYLISTS_EN_PARALLELE: "2"   # 3 maximum
+      INTERVALLE_HEURES: "0"        # 0 = une passe puis arrêt ; ex. 24 = chaque jour
+    restart: "no"

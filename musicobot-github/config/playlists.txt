@@ -1,0 +1,2 @@
+# Une URL de playlist par ligne. Les lignes commençant par # sont ignorées.
+# https://www.youtube.com/playlist?list=XXXXXXXXXXXXXXXX
