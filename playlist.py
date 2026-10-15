@@ -19,6 +19,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import yt_dlp
 
@@ -304,6 +305,29 @@ def url_video(entree):
             or f"https://www.youtube.com/watch?v={entree['id']}")
 
 
+class AucuneVideo(RuntimeError):
+    """Aucun résultat de recherche ne correspond : ce n'est pas un blocage de YouTube."""
+
+
+def choisir_video(entree, journal):
+    """Recherche « ytsearchN:… » : URL du résultat désigné par entree["choisir"] (ex. celui qui
+    a la durée du morceau Deezer)."""
+    # Recherche silencieuse dans les journaux ; ses erreurs comptent comme celles du téléchargement
+    discret = SimpleNamespace(debug=lambda msg: None, info=lambda msg: None,
+                              warning=journal.warning, error=journal.error)
+    ydl = yt_dlp.YoutubeDL(options_communes(journal) | {"extract_flat": True, "logger": discret})
+    try:
+        info = ydl.extract_info(entree["url"], download=False)
+    finally:
+        fermer(ydl)
+    if not info:   # erreur YouTube, déjà notée dans le journal
+        return None
+    choisie = entree["choisir"]([e for e in info.get("entries") or [] if e])
+    if not choisie:
+        raise AucuneVideo("aucun résultat YouTube ne correspond au morceau (live, remix ou durée différente)")
+    return url_video(choisie)
+
+
 def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
     """Télécharge une vidéo ou une playlist. Renvoie un résumé (dict).
     Avec `entrees` (+ titre, dossier) : télécharge directement cette liste
@@ -438,7 +462,16 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             nb_erreurs, nb_ok = len(journal.erreurs), len(telechargees)
             courante.update(deezer=entree.get("deezer"), categorie=entree.get("categorie"))
             try:
-                ydl.extract_info(url_video(entree), download=True)
+                adresse = choisir_video(entree, journal) if entree.get("choisir") else url_video(entree)
+                if adresse:
+                    ydl.extract_info(adresse, download=True)
+            except AucuneVideo as e:
+                journal.info(f"ERREUR : {e}")   # échec, sans compter dans les séries de blocage
+                echecs[cle] = entree.get("title") or "?"
+                if suivi:
+                    suivi.maj(erreurs=len(echecs))
+                i += 1
+                continue
             except Exception as e:  # noqa: BLE001
                 if suivi and suivi.annule:
                     annule = True

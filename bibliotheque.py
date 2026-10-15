@@ -37,7 +37,7 @@ REGISTRES = (".deja_telecharges.txt", top.NOM_REGISTRE)
 # Dossiers jamais parcourus : corbeille et miniatures des NAS, fichiers en cours
 DOSSIERS_IGNORES = {"@eaDir", "#recycle", "#snapshot", "@Recycle", ".Trash-1000"}
 # Ordre de préférence des albums Deezer : l'album d'origine plutôt qu'une compilation
-TYPES_ALBUM = {"album": 0, "ep": 1, "single": 2, "compile": 3}
+TYPES_ALBUM = top.TYPES_ALBUM
 # Variantes d'un morceau : une vidéo « Remix » ne doit pas être reconnue comme l'original
 VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustique", "cover", "demo"}
 # Mots qui désignent une variante : « Wax Tour à l'Ancienne Belgique » est un live,

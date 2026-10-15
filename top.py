@@ -1,6 +1,7 @@
 """
 Musiques à partir de Deezer (API publique, aucun compte ni clé nécessaire),
-téléchargées depuis YouTube (1er résultat de recherche « artiste - titre audio ») :
+téléchargées depuis YouTube (parmi les premiers résultats de recherche « artiste - titre audio »,
+la vidéo qui a la durée du morceau Deezer et n'est pas un live ni un remix) :
 
   - Top du jour : classements Deezer Charts (France, USA, Monde), N premières musiques
   - Artiste     : toute la discographie d'un artiste (ou ses N titres les plus populaires)
@@ -28,6 +29,7 @@ DOSSIER_TOP = os.path.join(dl.DOSSIER, os.environ.get("DOSSIER_TOP", "Top du jou
 NOM_REGISTRE = ".deja_telecharges_deezer.txt"
 REGISTRE = os.path.join(dl.DOSSIER, NOM_REGISTRE)   # un seul registre pour tout le dossier music
 # MusicBrainz : vrai nom et chaîne YouTube des artistes (API publique, 1 requête/s maximum)
+RESULTATS_YOUTUBE = 5   # résultats de recherche comparés à la durée Deezer pour chaque morceau
 MB_AGENT = "musicobot/1.0 ( https://github.com/Rycrem/musicobot )"
 MB_REQUETES_MAX = 6   # par recherche /artiste, pour garder une réponse rapide
 
@@ -84,9 +86,13 @@ def api_pages(chemin, maxi=2000):
 
 
 def classement(playlist_id, nombre=TOP_NOMBRE):
-    """[(id_deezer, artiste, titre), ...] des `nombre` premières musiques d'une playlist."""
+    """[(id_deezer, artiste, titre, durée), ...] des `nombre` premières musiques d'une playlist."""
     donnees = api(f"playlist/{playlist_id}/tracks?limit={nombre}")
-    return [(str(t["id"]), t["artist"]["name"], t["title"]) for t in donnees.get("data", [])][:nombre]
+    return [morceau(t) for t in donnees.get("data", [])][:nombre]
+
+
+def morceau(t):
+    return (str(t["id"]), t["artist"]["name"], t["title"], t.get("duration"))
 
 
 def chercher_artistes(nom, limite=5):
@@ -185,24 +191,64 @@ def cle_titre(titre):
     return re.sub(r"[^a-z0-9]+", " ", t).strip()
 
 
+# Rangs des albums Deezer pour /artiste : un titre présent sur plusieurs albums est pris sur
+# l'album studio, avant l'EP, le single, la compilation, et les bonus des éditions deluxe
+TYPES_ALBUM = {"album": 0, "ep": 1, "single": 2, "compile": 3}
+EDITION_BONUS = re.compile(r"\b(deluxe|box set|expanded|anniversary|edition)\b", re.I)
+# Best-of souvent classés « album » sur Deezer : traités comme des compilations
+BEST_OF = re.compile(r"\b(greatest hits|best of|hits|collection|anthology|essentials?|the very best)\b", re.I)
+# Versions écartées de la discographie, en plus des lives, remixes, démos… de bibliotheque.py
+AUTRES_VERSIONS = re.compile(r"\b(rough mix|riff tapes?|take \d+|writing in progress|work in progress"
+                             r"|pre-production|interview|commentary|fan recording)\b", re.I)
+
+
+def annotation(titre):
+    """Ce que Deezer ajoute au nom du morceau : « Battery (Live at …) », « Orion - Remastered »."""
+    return " ".join(re.findall(r"[\(\[](.*?)[\)\]]", titre) + re.findall(r"\s-\s(.*)$", titre))
+
+
+def autre_version(titre):
+    """Live, démo, remix, prise de studio… : pas la version de l'album."""
+    import bibliotheque   # import ici : bibliotheque importe déjà top
+    texte = annotation(titre)
+    return bool(texte) and bool(bibliotheque.variantes(texte) or AUTRES_VERSIONS.search(texte))
+
+
 def discographie(artiste_id, nombre=0, suivi=None):
     """Musiques d'un artiste : ses `nombre` titres les plus populaires, ou (0) toute sa
-    discographie (albums, EP, singles), sans les doublons de titre.
+    discographie studio (albums, EP, singles), sans les doublons de titre.
+    Les albums studio passent en premier, du plus ancien au plus récent : chaque titre est pris
+    sur son album d'origine, qui est donc complet. Les albums live et les lives, démos ou
+    remixes des singles et des éditions deluxe sont écartés.
     S'arrête (liste vide) si le téléchargement est annulé pendant la lecture."""
     if nombre:
         pistes = api(f"artist/{artiste_id}/top?limit={nombre}").get("data", [])
-        return [(str(t["id"]), t["artist"]["name"], t["title"]) for t in pistes]
+        return [morceau(t) for t in pistes]
+
+    def rang(album):
+        type_album = TYPES_ALBUM.get(album.get("record_type"), 2)
+        if BEST_OF.search(album["title"]):
+            type_album = TYPES_ALBUM["compile"]
+        # L'édition deluxe juste après l'édition standard du même jour (ou à sa place si Deezer
+        # n'a qu'elle) ; ses bonus restent derrière les albums studio
+        return (type_album, album.get("release_date") or "9999", bool(EDITION_BONUS.search(album["title"])))
+
     morceaux, vus = [], set()
-    for album in api_pages(f"artist/{artiste_id}/albums?limit=100"):
+    for album in sorted(api_pages(f"artist/{artiste_id}/albums?limit=100"), key=rang):
         if suivi and suivi.annule:
             return []
-        for t in api_pages(f"album/{album['id']}/tracks?limit=200"):
+        if autre_version(album["title"]):
+            continue   # « Erase The Pain (Live) »
+        pistes = api_pages(f"album/{album['id']}/tracks?limit=200")
+        if sum(autre_version(t["title"]) for t in pistes) > len(pistes) / 2:
+            continue   # album live (S&M, Live Shit…) : ses titres sont déjà sur les albums studio
+        for t in pistes:
             if str(t.get("artist", {}).get("id")) != str(artiste_id):
                 continue   # compilations : on ne garde que les titres de l'artiste
             cle = cle_titre(t["title"])
-            if cle and cle not in vus:
+            if cle and cle not in vus and not autre_version(t["title"]):
                 vus.add(cle)
-                morceaux.append((str(t["id"]), t["artist"]["name"], t["title"]))
+                morceaux.append(morceau(t))
     return morceaux
 
 
@@ -217,6 +263,28 @@ def noter(ids_titres):
     with open(REGISTRE, "a", encoding="utf-8") as f:
         for id_deezer, nom in ids_titres:
             f.write(f"{id_deezer}  {nom}\n")
+
+
+def choix_video(artiste, titre, duree):
+    """Fonction qui choisit, parmi les résultats d'une recherche YouTube, la vidéo du morceau
+    Deezer : pas un live ni un remix (sauf si c'en est un sur Deezer), à 15 s près de préférence
+    sur la chaîne de l'artiste, sinon la durée la plus proche. None si aucune ne convient
+    (morceau retenté la fois suivante)."""
+    import bibliotheque   # import ici : bibliotheque importe déjà top
+    attendues = bibliotheque.variantes(titre)
+    nom = bibliotheque.base(artiste)
+
+    def rang(video):
+        ecart = abs(video["duration"] - duree) if duree and video.get("duration") else None
+        officielle = bibliotheque.base(bibliotheque.nom_chaine(video.get("channel"))) == nom
+        return (ecart is None or ecart > 15, not officielle, ecart if ecart is not None else 0)
+
+    def choisir(resultats):
+        bonnes = [v for v in resultats
+                  if not bibliotheque.variantes(v.get("title") or "") - attendues
+                  and not (duree and v.get("duration") and abs(v["duration"] - duree) > 90)]
+        return min(bonnes, key=rang) if bonnes else None
+    return choisir
 
 
 def telecharger_morceaux(titre, morceaux, suivi=None, cle_url="deezer", categorie=None):
@@ -235,9 +303,10 @@ def telecharger_morceaux(titre, morceaux, suivi=None, cle_url="deezer", categori
                 "erreurs": 0, "echecs": [], "index_echecs": [], "deja": deja}
 
     entrees = []
-    for id_deezer, artiste, t in nouveaux:
+    for id_deezer, artiste, t, duree in nouveaux:
         recherche = re.sub(r'["]', "", f"{artiste} - {t}")
-        entrees.append({"url": f"ytsearch1:{recherche} audio", "title": f"{artiste} - {t}", "id": None,
+        entrees.append({"url": f"ytsearch{RESULTATS_YOUTUBE}:{recherche} audio", "title": f"{artiste} - {t}",
+                        "id": None, "choisir": choix_video(artiste, t, duree),
                         "deezer": id_deezer,   # tags et rangement d'après ce morceau Deezer
                         "categorie": categorie})
     resume = dl.telecharger(cle_url, suivi, entrees=entrees, titre=titre,

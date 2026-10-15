@@ -792,7 +792,7 @@ def enregistrer_commandes(bot: Bot):
                               description="Les musiques déjà présentes sur le NAS sont toujours sautées.")
         embed.add_field(name="Télécharger", inline=False, value=(
             "`/add <lien>` — une vidéo ou une playlist YouTube\n"
-            "`/artiste <nom> [nombre]` — toute la discographie d'un artiste, "
+            "`/artiste <nom> [nombre]` — tous les albums studio d'un artiste (complets, sans les lives), "
             "ou ses N titres les plus populaires (choix dans une liste, bouton pour annuler)\n"
             "`/top` — le top 10 du jour France, USA et Monde (aussi automatique "
             f"chaque soir{f' à {TOP_HEURE}' if TOP_HEURE else ''})"))
