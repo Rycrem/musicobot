@@ -39,10 +39,12 @@ DOSSIERS_IGNORES = {"@eaDir", "#recycle", "#snapshot", "@Recycle", ".Trash-1000"
 # Ordre de préférence des albums Deezer : l'album d'origine plutôt qu'une compilation
 TYPES_ALBUM = {"album": 0, "ep": 1, "single": 2, "compile": 3}
 # Variantes d'un morceau : une vidéo « Remix » ne doit pas être reconnue comme l'original
-VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustique", "cover"}
+VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustique", "cover", "demo"}
 # Mots qui désignent une variante : « Wax Tour à l'Ancienne Belgique » est un live,
 # « En acustico » une version acoustique
 SYNONYMES = {"tour": "live", "concert": "live", "zenith": "live", "bercy": "live", "olympia": "live",
+             "festival": "live", "stadium": "live", "arena": "live", "sbd": "live", "soundboard": "live",
+             "proshot": "live", "rehearsal": "live", "awards": "live",
              "unplugged": "acoustique", "acoustic": "acoustique", "acustico": "acoustique"}
 
 
@@ -51,11 +53,11 @@ SYNONYMES = {"tour": "live", "concert": "live", "zenith": "live", "bercy": "live
 # ---------------------------------------------------------------------------
 # Ligatures et tirets longs (perdus sinon par la conversion en ASCII)
 LIGATURES = str.maketrans({"œ": "oe", "Œ": "Oe", "æ": "ae", "Æ": "Ae", "ß": "ss", "–": "-", "—": "-"})
-MOTS_PARASITES = (r"official|officiel|officielle|music|video|clip|audio|lyrics?|paroles|visualizer"
-                  r"|hd|hq|4k|wmv|mp3|mp4|avi|medley")
+MOTS_PARASITES = (r"official|officiel|officielle|no video|music|video|clip|audio|lyrics?|paroles"
+                  r"|visualizer|hd|hq|4k|wmv|mp3|mp4|avi|medley|studio version|album version")
 ROMAINS = {"ii": "2", "iii": "3", "iv": "4"}
-# « Artiste - Titre », « Artiste: Titre », « Artiste\Album - Titre »
-SEPARATEURS = r"\s+[-–—]\s+|\s*[:：]\s+|\\"
+# « Artiste - Titre », « Artiste- Titre », « Artiste: Titre », « Titre ⧸ Autre titre », « Artiste\Album - Titre »
+SEPARATEURS = r"\s+[-–—]\s*|\s*[-–—]\s+|\s*[:：]\s+|\s+[/⧸]\s+|\\"
 
 
 def minuscules(texte):
@@ -63,11 +65,14 @@ def minuscules(texte):
     return unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode().lower()
 
 
-def base(texte, parentheses=False):
+def base(texte, parentheses=False, feat=True):
     """Texte simplifié pour comparer un titre YouTube et un titre Deezer : sans « feat. … »,
     sans « Official Video », « Lyrics »…, et sans le contenu des parenthèses (sauf
     parentheses=True : « Le vaudou (est toujours debout) » → « le vaudou est toujours debout »)."""
     t = re.sub(r"(?<=[a-z])(II|III|IV)\b", r" \1", texte or "")   # « comateenII » → « comateen II »
+    t = re.sub(r"(\w+in)['’](?!\w)", r"\1g", t)   # « Rollin' » = « Rolling »
+    if not feat:   # « Sean Paul ft. Beyonce Baby Boy » : pas de tiret, on garde tout
+        t = re.sub(r"\b(feat|ft|featuring)\b\.?", " ", t, flags=re.I)
     t = re.sub(r"[\(\[\{]\s*(feat|ft|featuring)\b.*?[\)\]\}]", " ", minuscules(t))
     t = re.sub(r"[\(\)\[\]\{\}]", " ", t) if parentheses else re.sub(r"[\(\[\{].*?[\)\]\}]", " ", t)
     t = re.sub(r"\b(feat|ft|featuring)\b[^-–—(\[]*", " ", t)   # « ft. X » jusqu'au tiret suivant
@@ -99,10 +104,12 @@ def titre_correspond(titre_deezer, titre_video):
     """Le titre Deezer se retrouve-t-il dans le titre de la vidéo ? Avec ou sans le contenu des
     parenthèses, et sans tenir compte des espaces (« Space Ship » / « Spaceship »)."""
     t = base(titre_deezer)
-    if contient(base(titre_video), t) or contient(base(titre_video, parentheses=True), t):
+    formes = (base(titre_video), base(titre_video, parentheses=True),
+              base(titre_video, parentheses=True, feat=False))   # « Sean Paul ft. Beyonce Baby Boy »
+    if any(contient(f, t) for f in formes):
         return True
     compact = t.replace(" ", "")
-    return len(compact) >= 6 and compact in base(titre_video, parentheses=True).replace(" ", "")
+    return len(compact) >= 6 and compact in formes[1].replace(" ", "")
 
 
 def decouper(titre):
@@ -122,13 +129,41 @@ def nom_chaine(chaine):
     return re.sub(r"VEVO$", "", chaine).strip()
 
 
+def annees(texte):
+    return set(re.findall(r"\b(?:19|20)\d\d\b", texte or ""))
+
+
+def autre_concert(candidat, titre_video):
+    """Live Deezer d'une autre année que celle de la vidéo (« House of Vans 2016 » contre
+    « Live at Wembley 1992 ») ; années prises dans les titres et la date de l'album."""
+    video = annees(titre_video)
+    if not video:
+        return False
+    deezer = annees(f"{candidat['title']} {candidat['album'].get('title')}")
+    try:
+        deezer |= annees((album(candidat["album"]["id"]).get("release_date") or "")[:4])
+    except Exception:  # noqa: BLE001 — album illisible : on se fie aux titres
+        pass
+    return bool(deezer) and not video & deezer
+
+
 def note(candidat, titre_video, texte_artistes, duree):
     """Note d'un résultat Deezer (plus petit = meilleur), None s'il ne correspond pas.
     Les versions d'un même morceau ont la même note : meilleure_version() les départage."""
-    if (not titre_correspond(candidat["title"], titre_video)
-            or variantes(candidat["title"]) != variantes(titre_video)):
+    if not titre_correspond(candidat["title"], titre_video):
         return None
     ecart = abs(duree - candidat["duration"]) if duree and candidat.get("duration") else None
+    differences = variantes(candidat["title"]) ^ variantes(titre_video)
+    # « Les plus mauvaises nuits (acoustique) » = « (Version acoustique live) » : même durée,
+    # c'est le même enregistrement même si la vidéo ne dit pas « live »
+    if differences and not (differences == {"live"} and ecart is not None and ecart <= 3):
+        return None
+    if "live" in variantes(candidat["title"]):
+        if autre_concert(candidat, titre_video):
+            return None
+        # Sans année dans la vidéo, rien ne dit que c'est le même concert : durée à 15 s près
+        if not annees(titre_video) and (ecart is None or ecart > 15):
+            return None
     if ecart is not None and ecart > 90:   # même un clip avec une longue intro n'en est pas là
         return None
     artiste_ok = contient(texte_artistes, base(candidat["artist"]["name"]))
@@ -159,7 +194,7 @@ def identifier(titre_video, artiste=None, piste=None, chaine=None, duree=None):
     `artiste` : artiste connu (YouTube Music, ou dossier Artistes/<nom> pour /ranger)."""
     chaine = nom_chaine(chaine)
     texte_video = f"{piste or ''} {titre_video}" if piste else titre_video
-    texte_artistes = base(f"{titre_video} {artiste or ''} {chaine}", parentheses=True)
+    texte_artistes = base(f"{titre_video} {artiste or ''} {chaine}", parentheses=True, feat=False)
     gauche, droite = decouper(titre_video)
     # Recherches de la plus précise à la plus large : Deezer ne trouve rien si on lui donne
     # trop de mots (« sean paul sukuward spaceship »), d'où l'artiste principal seul.
@@ -184,6 +219,13 @@ def identifier(titre_video, artiste=None, piste=None, chaine=None, duree=None):
     if nom and reste.startswith(f"{nom} "):
         reste = reste[len(nom) + 1:]
     recherches.append(f"{nom} {sans_variantes(reste)}")
+    # Chaque partie du titre, coupée avant les parenthèses : « Shout (Street Respect) - Atlantic
+    # LP Dutty Rock 2002 » → « shout », « Any Gyal Me Touch (2001) Liquid Riddim » → « any gyal me touch »
+    for partie in re.split(SEPARATEURS, titre_video)[:4]:
+        partie = base(re.split(r"[\(\[]", partie)[0])
+        if partie and partie != nom:
+            recherches.append(f"{nom} {partie}")
+    recherches.append(base(titre_video, feat=False))   # « Sean Paul ft. Beyonce Baby Boy »
     if chaine and not contient(base(titre_video), base(chaine)):
         recherches.append(f"{chaine} {base(titre_video)}")
     for recherche in dict.fromkeys(r.strip() for r in recherches if r.strip()):
