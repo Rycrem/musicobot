@@ -80,7 +80,7 @@ music/
 - Un single n'a pas de dossier d'album : il est directement dans le dossier de l'artiste (ses tags gardent le nom et la pochette du single).
 - Le top du jour reste une catégorie à part (« Par dossier » dans Audio Station), avec les mêmes tags : ses musiques apparaissent aussi sous le bon artiste et le bon album.
 - Une musique déjà présente dans la bibliothèque (même artiste, album et titre) n'est pas gardée en double.
-- Une vidéo non reconnue (remix inconnu de Deezer, live, son de niche…) va dans `Non classés/`, avec les informations de YouTube.
+- Une vidéo non reconnue (remix inconnu de Deezer, live, son de niche…) va dans `Non classés/`. Son artiste est celui du titre (« Artiste - Titre ») ou du dossier `Artistes/<nom>`, jamais le nom de la chaîne YouTube : sans artiste connu, le champ reste vide.
 - **`/ranger`** fait la même chose pour les musiques déjà sur le NAS (anciens dossiers `Titres/`, `Top du jour/`, `Artistes/`, playlists…). Les musiques non reconnues restent à leur place et sont listées ; les dossiers vidés sont supprimés. À lancer une fois après la mise à jour, puis quand tu veux.
 - Les registres des musiques déjà téléchargées sont communs à toute la bibliothèque (`music/.deja_telecharges*.txt`) ; ceux des anciens dossiers y sont repris automatiquement au démarrage.
 

@@ -343,6 +343,44 @@ def lire_tags(chemin):
     return infos
 
 
+def artiste_probable(titre_video, artiste=None):
+    """Artiste d'une musique non reconnue : celui qu'on connaît (YouTube Music, dossier
+    Artistes/<nom>), sinon la partie gauche de « Artiste - Titre », sinon aucun.
+    Jamais le nom de la chaîne YouTube (« metfan4l », « Jamwax Collection »…)."""
+    if artiste:
+        return artiste.strip()
+    gauche, _ = decouper(titre_video)
+    return artiste_principal(gauche).strip() if gauche else None
+
+
+def corriger_artiste(chemin, artiste, actuel=None):
+    """Remplace l'artiste mis par YouTube (le nom de la chaîne) par `artiste`, ou le retire
+    si on ne le connaît pas. Ne réécrit pas un fichier déjà correct. Renvoie True si modifié."""
+    if (artiste or None) == (actuel or None):
+        return False
+    if chemin.lower().endswith(".mp3"):
+        try:
+            tags = ID3(chemin)
+        except ID3NoHeaderError:
+            tags = ID3()
+        for cle, cadre in (("TPE1", TPE1), ("TPE2", TPE2)):
+            tags.delall(cle)
+            if artiste:
+                tags.add(cadre(encoding=3, text=artiste))
+        tags.save(chemin)
+        return True
+    f = MP4(chemin)
+    if f.tags is None:
+        f.add_tags()
+    for cle in ("©ART", "aART"):
+        if artiste:
+            f.tags[cle] = [artiste]
+        else:
+            f.tags.pop(cle, None)
+    f.save()
+    return True
+
+
 def coupe(texte, n=100):
     """Nom de fichier ou de dossier valide sous Windows/SMB et pas trop long."""
     return dl.nom_dossier(texte[:n])
@@ -390,6 +428,12 @@ def ranger_telechargement(chemin, info, deezer_id=None, categorie=None):
                             duree=info.get("duration"))
         deezer_id = trouve and trouve["id"]
     if not deezer_id:
+        try:
+            corriger_artiste(chemin, artiste_probable(info.get("title") or "",
+                                                      info.get("artist") or info.get("creator")),
+                             actuel=lire_tags(chemin)["artiste"])
+        except Exception as e:  # noqa: BLE001 — tags illisibles : la musique est gardée quand même
+            dl.log(f"Artiste non corrigé ({e}) : {os.path.basename(chemin)}")
         cible = os.path.join(DOSSIER_NON_CLASSES, os.path.basename(chemin))
         if os.path.exists(cible):   # même vidéo (son identifiant est dans le nom) : on remplace
             os.remove(cible)
@@ -512,14 +556,16 @@ def ranger_bibliotheque(suivi=None):
             if deezer_id and categorie:   # top du jour déjà tagué : il reste où il est
                 deja += 1
                 continue
+            titre_video = infos["titre"] or titre_depuis_nom(chemin)
+            parties = relatif.split(os.sep)
+            artiste = parties[1] if len(parties) > 2 and parties[0] == "Artistes" else None
             if not deezer_id:
-                titre_video = infos["titre"] or titre_depuis_nom(chemin)
-                parties = relatif.split(os.sep)
-                artiste = parties[1] if len(parties) > 2 and parties[0] == "Artistes" else None
                 trouve = identifier(titre_video, artiste=artiste, chaine=infos["artiste"],
                                     duree=infos["duree"])
                 deezer_id = trouve and trouve["id"]
             if not deezer_id:
+                # Laissée à sa place, mais sans le nom de la chaîne YouTube comme artiste
+                corriger_artiste(chemin, artiste_probable(titre_video, artiste), infos["artiste"])
                 non_reconnues.append(relatif)
                 continue
             meta = details(deezer_id)
