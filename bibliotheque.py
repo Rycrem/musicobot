@@ -39,15 +39,21 @@ DOSSIERS_IGNORES = {"@eaDir", "#recycle", "#snapshot", "@Recycle", ".Trash-1000"
 # Ordre de préférence des albums Deezer : l'album d'origine plutôt qu'une compilation
 TYPES_ALBUM = {"album": 0, "ep": 1, "single": 2, "compile": 3}
 # Variantes d'un morceau : une vidéo « Remix » ne doit pas être reconnue comme l'original
-VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustic", "acoustique", "cover"}
+VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustique", "cover"}
+# Mots qui désignent une variante : « Wax Tour à l'Ancienne Belgique » est un live,
+# « En acustico » une version acoustique
+SYNONYMES = {"tour": "live", "concert": "live", "zenith": "live", "bercy": "live", "olympia": "live",
+             "unplugged": "acoustique", "acoustic": "acoustique", "acustico": "acoustique"}
 
 
 # ---------------------------------------------------------------------------
 # Reconnaissance d'une vidéo YouTube sur Deezer
 # ---------------------------------------------------------------------------
-LIGATURES = str.maketrans({"œ": "oe", "Œ": "Oe", "æ": "ae", "Æ": "Ae", "ß": "ss"})
+# Ligatures et tirets longs (perdus sinon par la conversion en ASCII)
+LIGATURES = str.maketrans({"œ": "oe", "Œ": "Oe", "æ": "ae", "Æ": "Ae", "ß": "ss", "–": "-", "—": "-"})
 MOTS_PARASITES = (r"official|officiel|officielle|music|video|clip|audio|lyrics?|paroles|visualizer"
-                  r"|hd|hq|4k|wmv|mp3|mp4|avi")
+                  r"|hd|hq|4k|wmv|mp3|mp4|avi|medley")
+ROMAINS = {"ii": "2", "iii": "3", "iv": "4"}
 # « Artiste - Titre », « Artiste: Titre », « Artiste\Album - Titre »
 SEPARATEURS = r"\s+[-–—]\s+|\s*[:：]\s+|\\"
 
@@ -61,15 +67,28 @@ def base(texte, parentheses=False):
     """Texte simplifié pour comparer un titre YouTube et un titre Deezer : sans « feat. … »,
     sans « Official Video », « Lyrics »…, et sans le contenu des parenthèses (sauf
     parentheses=True : « Le vaudou (est toujours debout) » → « le vaudou est toujours debout »)."""
-    t = re.sub(r"[\(\[\{]\s*(feat|ft|featuring)\b.*?[\)\]\}]", " ", minuscules(texte))
+    t = re.sub(r"(?<=[a-z])(II|III|IV)\b", r" \1", texte or "")   # « comateenII » → « comateen II »
+    t = re.sub(r"[\(\[\{]\s*(feat|ft|featuring)\b.*?[\)\]\}]", " ", minuscules(t))
     t = re.sub(r"[\(\)\[\]\{\}]", " ", t) if parentheses else re.sub(r"[\(\[\{].*?[\)\]\}]", " ", t)
     t = re.sub(r"\b(feat|ft|featuring)\b[^-–—(\[]*", " ", t)   # « ft. X » jusqu'au tiret suivant
     t = re.sub(rf"\b({MOTS_PARASITES})\b", " ", t)
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", t).split())
+    return " ".join(ROMAINS.get(m, m) for m in re.sub(r"[^a-z0-9]+", " ", t).split())
 
 
 def variantes(texte):
-    return VARIANTES & set(re.findall(r"[a-z]+", minuscules(texte)))
+    return VARIANTES & {SYNONYMES.get(m, m) for m in re.findall(r"[a-z]+", minuscules(texte))}
+
+
+def sans_variantes(texte):
+    """« stef 2 en acustico » → « stef 2 » : Deezer ne trouve rien avec ces mots en trop."""
+    mots = texte.split()
+    for i, m in enumerate(mots):
+        if SYNONYMES.get(m, m) in VARIANTES:
+            mots = mots[:i]
+            break
+    while mots and mots[-1] in {"en", "in", "au", "a", "version"}:
+        mots.pop()
+    return " ".join(mots)
 
 
 def contient(texte, morceau):
@@ -115,7 +134,9 @@ def note(candidat, titre_video, texte_artistes, duree):
     artiste_ok = contient(texte_artistes, base(candidat["artist"]["name"]))
     if not artiste_ok and (ecart is None or ecart > 2):
         return None   # artiste absent du titre : il faut au moins la même durée à 2 s près
-    return (not artiste_ok, ecart is not None and ecart > 15)
+    # Un même morceau a souvent plusieurs lives : c'est la durée qui désigne le bon concert
+    proximite = round(ecart) if ecart is not None and "live" in variantes(titre_video) else 0
+    return (not artiste_ok, ecart is not None and ecart > 15, proximite)
 
 
 def meilleure_version(versions):
@@ -155,6 +176,14 @@ def identifier(titre_video, artiste=None, piste=None, chaine=None, duree=None):
     if dernier != droite and (artiste or gauche):
         recherches.append(f"{base(artiste or artiste_principal(gauche))} {base(dernier)}")
     recherches.append(base(titre_video))
+    # Avec le contenu des parenthèses (« Indochine (les 7 jours de Pékin) ») et sans les mots
+    # de variante (« Indochine-Stef 2 EN ACUSTICO » → « indochine stef 2 »)
+    nom = base(artiste or (gauche and artiste_principal(gauche)) or "")
+    recherches.append(f"{nom} {base(droite, parentheses=True)}")
+    reste = base(titre_video)
+    if nom and reste.startswith(f"{nom} "):
+        reste = reste[len(nom) + 1:]
+    recherches.append(f"{nom} {sans_variantes(reste)}")
     if chaine and not contient(base(titre_video), base(chaine)):
         recherches.append(f"{chaine} {base(titre_video)}")
     for recherche in dict.fromkeys(r.strip() for r in recherches if r.strip()):
