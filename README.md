@@ -68,14 +68,16 @@ Les musiques sont rangées par artiste et album ; seul le top du jour garde son 
 ```
 music/
 ├── <Artiste>/
-│   └── <Album>/
-│       ├── 01 - <Titre>.m4a
-│       └── 02 - <Titre>.m4a
+│   ├── <Album>/
+│   │   ├── 01 - <Titre>.m4a
+│   │   └── 02 - <Titre>.m4a
+│   └── <Titre d'un single>.m4a
 ├── Top du jour/            /top et top automatique : <Artiste> - <Titre>.m4a
 └── Non classés/            musiques non reconnues sur Deezer
 ```
 
 - Chaque musique est reconnue sur Deezer : directement pour `/top` et `/artiste`, d'après le titre de la vidéo pour `/add` et les playlists suivies. Ses tags sont réécrits (titre, artiste, artiste de l'album, album, numéro de piste, année, genre, pochette de l'album) : Audio Station, Plex ou Jellyfin les classent correctement. Quand un morceau existe en plusieurs versions, c'est celle de l'album d'origine qui est retenue (plutôt qu'un single ou une compilation).
+- Un single n'a pas de dossier d'album : il est directement dans le dossier de l'artiste (ses tags gardent le nom et la pochette du single).
 - Le top du jour reste une catégorie à part (« Par dossier » dans Audio Station), avec les mêmes tags : ses musiques apparaissent aussi sous le bon artiste et le bon album.
 - Une musique déjà présente dans la bibliothèque (même artiste, album et titre) n'est pas gardée en double.
 - Une vidéo non reconnue (remix inconnu de Deezer, live, son de niche…) va dans `Non classés/`, avec les informations de YouTube.

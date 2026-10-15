@@ -198,6 +198,7 @@ def details(deezer_id):
         "artiste": piste["artist"]["name"],
         "artiste_album": (alb.get("artist") or {}).get("name") or piste["artist"]["name"],
         "album": alb.get("title") or piste["album"]["title"],
+        "single": alb.get("record_type") == "single",
         "piste": piste.get("track_position") or 0,
         "pistes": alb.get("nb_tracks") or 0,
         "disque": piste.get("disk_number") or 1,
@@ -277,9 +278,12 @@ def coupe(texte, n=100):
 
 
 def chemin_cible(meta, ext, categorie=None):
-    """music/<Artiste>/<Album>/<NN - Titre>, ou <categorie>/<Artiste - Titre> (top du jour)."""
+    """music/<Artiste>/<Album>/<NN - Titre>, music/<Artiste>/<Titre> pour un single,
+    ou <categorie>/<Artiste - Titre> (top du jour)."""
     if categorie:
         return os.path.join(categorie, coupe(f"{meta['artiste']} - {meta['titre']}", 150) + ext)
+    if meta.get("single"):   # pas de dossier d'album pour un seul morceau
+        return os.path.join(dl.DOSSIER, coupe(meta["artiste_album"]), coupe(meta["titre"], 150) + ext)
     numero = (f"{meta['disque']}-{meta['piste']:02d}" if meta["disque"] > 1 else f"{meta['piste']:02d}")
     nom = f"{numero} - {meta['titre']}" if meta["piste"] else meta["titre"]
     return os.path.join(dl.DOSSIER, coupe(meta["artiste_album"]), coupe(meta["album"]), coupe(nom, 150) + ext)
@@ -403,17 +407,6 @@ def categorie_de(chemin):
     return DOSSIER_TOP if os.path.dirname(os.path.abspath(chemin)) == os.path.abspath(DOSSIER_TOP) else None
 
 
-def deja_rangee(chemin, infos):
-    """Musique déjà rangée par cette version : tag Deezer présent et fichier à sa place
-    (music/<Artiste>/<Album>/<fichier> hors « Non classés », ou dans le top du jour)."""
-    if not infos["deezer_id"]:
-        return False
-    if categorie_de(chemin):
-        return True
-    relatif = os.path.relpath(chemin, dl.DOSSIER).split(os.sep)
-    return len(relatif) == 3 and os.path.join(dl.DOSSIER, relatif[0]) != DOSSIER_NON_CLASSES
-
-
 def titre_depuis_nom(chemin):
     """« Titre de la vidéo [identifiant].m4a » → « Titre de la vidéo »."""
     return re.sub(r"\s*\[[\w-]{11}\]$", "", os.path.splitext(os.path.basename(chemin))[0])
@@ -443,10 +436,11 @@ def ranger_bibliotheque(suivi=None):
             suivi.maj(etat="Reconnaissance sur Deezer")
         try:
             infos = lire_tags(chemin)
-            if deja_rangee(chemin, infos):
+            deezer_id = infos["deezer_id"]
+            categorie = categorie_de(chemin)
+            if deezer_id and categorie:   # top du jour déjà tagué : il reste où il est
                 deja += 1
                 continue
-            deezer_id = infos["deezer_id"]
             if not deezer_id:
                 titre_video = infos["titre"] or titre_depuis_nom(chemin)
                 parties = relatif.split(os.sep)
@@ -457,7 +451,13 @@ def ranger_bibliotheque(suivi=None):
             if not deezer_id:
                 non_reconnues.append(relatif)
                 continue
-            _, nouveau = placer(chemin, details(deezer_id), categorie_de(chemin))
+            meta = details(deezer_id)
+            # Déjà reconnue : on la déplace seulement si sa place a changé (ex. single sorti de son dossier)
+            if infos["deezer_id"] and os.path.abspath(
+                    chemin_cible(meta, os.path.splitext(chemin)[1].lower())) == os.path.abspath(chemin):
+                deja += 1
+                continue
+            _, nouveau = placer(chemin, meta, categorie)
             rangees += 1
             doublons += not nouveau
         except Exception as e:  # noqa: BLE001 — un fichier illisible n'arrête pas le rangement
