@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -54,8 +55,14 @@ def api(chemin_ou_url):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     for essai in range(3):
         patienter()
-        with urllib.request.urlopen(req, timeout=30) as r:
-            donnees = json.load(r)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                donnees = json.load(r)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if isinstance(e, urllib.error.HTTPError) or essai == 2:
+                raise
+            time.sleep(3)   # coupure réseau passagère (« Connection reset by peer ») : on réessaie
+            continue
         err = donnees.get("error") if isinstance(donnees, dict) else None
         if not err:
             return donnees
