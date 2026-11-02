@@ -4,6 +4,7 @@ téléchargées depuis YouTube (parmi les premiers résultats de recherche « ar
 la vidéo qui a la durée du morceau Deezer et n'est pas un live ni un remix) :
 
   - Top du jour : classements Deezer Charts (France, USA, Monde), N premières musiques
+  - Chanson     : une chanson choisie parmi les résultats d'une recherche
   - Artiste     : toute la discographie d'un artiste (ou ses N titres les plus populaires)
 
 Les musiques déjà téléchargées sont sautées grâce à un registre des identifiants Deezer.
@@ -113,6 +114,34 @@ def chercher_artistes(nom, limite=5):
     except Exception as e:  # noqa: BLE001 — MusicBrainz est facultatif
         dl.log(f"MusicBrainz indisponible ({e}) : liste sans vrai nom ni chaîne YouTube.")
     return artistes
+
+
+def chercher_chansons(recherche, limite=5):
+    """Chansons Deezer correspondant à `recherche` (titre, avec ou sans l'artiste), dans l'ordre
+    de pertinence de Deezer. Une seule proposition par chanson et par version : la version studio
+    est prise sur l'album d'origine, avant les lives, démos ou remixes (sauf si la recherche en
+    demande un : « master of puppets live »). Chaque chanson : {id, title, artist, album, duration,
+    link, fans_artiste, …}."""
+    import bibliotheque   # import ici : bibliotheque importe déjà top
+    res = api(f"search/track?q={urllib.parse.quote(recherche)}&limit={limite * 5}").get("data", [])
+    groupes = {}
+    for t in res:
+        cle = (str(t.get("artist", {}).get("id")), cle_titre(t["title"]), autre_version(t["title"]))
+        groupes.setdefault(cle, []).append(t)
+    demande = bool(bibliotheque.variantes(recherche) or AUTRES_VERSIONS.search(recherche))
+    cles = list(groupes) if demande else sorted(groupes, key=lambda c: c[2])
+    chansons = [groupes[c][0] if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
+    # Fans de l'artiste : pour distinguer l'original d'une reprise quand on ne connaît pas le groupe
+    fans = {}
+    for c in chansons:
+        id_artiste = c.get("artist", {}).get("id")
+        if id_artiste not in fans:
+            try:
+                fans[id_artiste] = api(f"artist/{id_artiste}").get("nb_fan")
+            except Exception:  # noqa: BLE001 — proposée quand même, sans le nombre de fans
+                fans[id_artiste] = None
+        c["fans_artiste"] = fans[id_artiste]
+    return chansons
 
 
 def nombre_titres(artiste):
@@ -340,6 +369,17 @@ def telecharger_top(nom, suivi=None):
     if not morceaux:
         raise RuntimeError("classement Deezer vide")
     return telecharger_morceaux(titre, morceaux, suivi, f"top:{nom}", categorie=DOSSIER_TOP)
+
+
+# ---------------------------------------------------------------------------
+# Chanson seule
+# ---------------------------------------------------------------------------
+def telecharger_chanson(chanson, suivi=None):
+    """`chanson` = dict renvoyé par chercher_chansons. Rangée dans Artiste/Album, comme /artiste."""
+    titre = f"{chanson['artist']['name']} - {chanson['title']}"
+    if suivi:
+        suivi.maj(titre=titre)
+    return telecharger_morceaux(titre, [morceau(chanson)], suivi, f"chanson:{chanson['id']}")
 
 
 # ---------------------------------------------------------------------------

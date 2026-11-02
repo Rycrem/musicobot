@@ -16,6 +16,7 @@ Bot Discord : télécharge sur le NAS les vidéos / playlists envoyées avec /ad
                (ou seulement ses N titres les plus populaires) : le bot propose
                les artistes trouvés dans une liste, puis annonce le téléchargement
                avec la photo de l'artiste (❌ ou bouton pour l'annuler)
+  /chanson <titre>  télécharge une chanson à partir de son nom, avec ou sans l'artiste (choix dans une liste)
   /ranger      range les musiques déjà présentes par artiste et album (tags Deezer)
 
 Chaque musique téléchargée est rangée dans music/<Artiste>/<Album>/ (voir bibliotheque.py).
@@ -411,6 +412,8 @@ class Bot(discord.Client):
                 embed.url = p["url"]
             elif p["url"].startswith("artiste:"):
                 embed.url = f"https://www.deezer.com/artist/{p['url'].split(':')[1]}"
+            elif p["url"].startswith("chanson:"):
+                embed.url = f"https://www.deezer.com/track/{p['url'].split(':')[1]}"
             embed.description = f"`{barre(p['pourcentage'])}` **{p['pourcentage']:.1f} %**\n{p['etat']}"
             if p["total"] > 1:
                 embed.add_field(name="Musiques",
@@ -617,7 +620,7 @@ async def repondre_suite(inter, contenu=None, **kw):
     return await inter.followup.send(contenu, ephemeral=True, **kw)
 
 
-NB_PROPOSITIONS = 5   # artistes proposés dans la liste de /artiste
+NB_PROPOSITIONS = 5   # artistes / chansons proposés dans la liste de /artiste et /chanson
 
 
 def embed_artiste(a, nombre, demandeur):
@@ -785,6 +788,73 @@ class ControleUpdate(discord.ui.View):
         await self.apres(inter, f"Retiré de la file d'attente : **{nom}**")
 
 
+def details_chanson(c):
+    """« 1,2 M fans · Album · 3:45 » : les fans de l'artiste d'abord (le texte est coupé à 100 caractères)."""
+    details = []
+    if c.get("fans_artiste"):
+        details.append(f"{nombre_lisible(c['fans_artiste'])} fans")
+    if c.get("album", {}).get("title"):
+        details.append(c["album"]["title"])
+    if c.get("duration"):
+        details.append(f"{c['duration'] // 60}:{c['duration'] % 60:02d}")
+    return " · ".join(details) or "—"
+
+
+def texte_chansons(chansons):
+    """Message au-dessus de la liste : chaque chanson avec un lien vers son extrait sur Deezer."""
+    lignes = ["Quelle chanson veux-tu télécharger ? Clique sur ▶ pour écouter un extrait (30 s) :"]
+    for c in chansons:
+        nom = court(f"{c['artist']['name']} - {c['title']}", 80)
+        fans = f" · {nombre_lisible(c['fans_artiste'])} fans" if c.get("fans_artiste") else ""
+        lien = c.get("link") or f"https://www.deezer.com/track/{c['id']}"
+        lignes.append(f"[▶](<{lien}>) **{nom}**{fans}")
+    return "\n".join(lignes)
+
+
+class ChoixChanson(discord.ui.View):
+    """Liste déroulante des chansons trouvées (+ « Annuler la demande »)."""
+
+    def __init__(self, bot, inter, chansons):
+        super().__init__(timeout=10 * 60)
+        self.bot, self.inter = bot, inter
+        self.chansons = {str(c["id"]): c for c in chansons}
+        options = [discord.SelectOption(label=court(f"{c['artist']['name']} - {c['title']}", 100),
+                                        value=str(c["id"]), description=court(details_chanson(c), 100))
+                   for c in chansons]
+        options.append(discord.SelectOption(label="Annuler la demande", value="annuler",
+                                            emoji=EMOJI_ANNULER))
+        self.liste = discord.ui.Select(placeholder="Choisis la bonne chanson…", options=options)
+        self.liste.callback = self.choisi
+        self.add_item(self.liste)
+
+    async def choisi(self, inter: discord.Interaction):
+        self.stop()
+        valeur = self.liste.values[0]
+        if valeur == "annuler":
+            return await inter.response.edit_message(content="Demande annulée.", view=None)
+        c = self.chansons[valeur]
+        nom = f"{c['artist']['name']} - {c['title']}"
+        action = lambda suivi: top.telecharger_chanson(c, suivi)  # noqa: E731
+        position, tache = await self.bot.ajouter_tache(f"chanson:{c['id']}", inter.user.id, inter.channel,
+                                                       action=action, inter=self.inter)
+        if tache is not None:
+            tache.nom = nom
+        if position is None:
+            texte = f"**{court(nom)}** est déjà en cours ou dans la file."
+        elif position == 0:
+            texte = f"Téléchargement lancé : **{court(nom)}**\nUtilise `/update` pour suivre l'avancement."
+        else:
+            texte = f"Ajouté à la file (position {position}) : **{court(nom)}**"
+        await inter.response.edit_message(content=texte, view=None)
+
+    async def on_timeout(self):
+        try:
+            await self.inter.edit_original_response(content="Demande expirée : refais `/chanson`.",
+                                                    view=None)
+        except discord.HTTPException:
+            pass
+
+
 def enregistrer_commandes(bot: Bot):
     @bot.tree.command(name="help", description="Liste des commandes du bot")
     async def aide(inter: discord.Interaction):
@@ -792,6 +862,7 @@ def enregistrer_commandes(bot: Bot):
                               description="Les musiques déjà présentes sur le NAS sont toujours sautées.")
         embed.add_field(name="Télécharger", inline=False, value=(
             "`/add <lien>` — une vidéo ou une playlist YouTube\n"
+            "`/chanson <titre>` — une chanson à partir de son nom, avec ou sans l'artiste (choix dans une liste)\n"
             "`/artiste <nom> [nombre]` — tous les albums studio d'un artiste (complets, sans les lives), "
             "ou ses N titres les plus populaires (choix dans une liste, bouton pour annuler)\n"
             "`/top` — le top 10 du jour France, USA et Monde (aussi automatique "
@@ -964,6 +1035,23 @@ def enregistrer_commandes(bot: Bot):
                  "à leur place. Ça peut prendre du temps sur une grosse bibliothèque."
                  if position == 0 else f"Rangement ajouté à la file (position {position}).")
         await repondre(inter, texte + "\nUtilise `/update` pour suivre l'avancement.")
+
+    @bot.tree.command(name="chanson", description="Télécharger une chanson à partir de son nom")
+    @app_commands.describe(titre="Titre de la chanson (ajoute l'artiste pour affiner, ex. « Daft Punk One More Time »)")
+    @app_commands.guild_only()
+    async def chanson(inter: discord.Interaction, titre: str):
+        if (erreur := bot.refus(inter)):
+            return await repondre(inter, erreur)
+        await inter.response.defer(thinking=True, ephemeral=True)
+        try:
+            trouvees = await asyncio.to_thread(top.chercher_chansons, titre.strip(), NB_PROPOSITIONS)
+        except Exception as e:  # noqa: BLE001
+            return await repondre_suite(inter, f"Recherche impossible sur Deezer : {court(str(e), 200)}")
+        if not trouvees:
+            return await repondre_suite(
+                inter, f"Aucune chanson trouvée pour « {court(titre, 60)} ». Essaie avec le nom de "
+                       "l'artiste, ou donne directement le lien YouTube avec `/add`.")
+        await repondre_suite(inter, texte_chansons(trouvees), view=ChoixChanson(bot, inter, trouvees))
 
     @bot.tree.command(name="verifier", description="Vérifier tout de suite les playlists suivies")
     @app_commands.guild_only()

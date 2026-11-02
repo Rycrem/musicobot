@@ -183,7 +183,8 @@ def meilleure_version(versions):
         except Exception:  # noqa: BLE001 — album illisible : version gardée en dernier
             return (9, "9999")
         type_album = TYPES_ALBUM.get(alb.get("record_type"), 2)
-        if base((alb.get("artist") or {}).get("name")) in ("various artists", "artistes divers"):
+        if (base((alb.get("artist") or {}).get("name")) in ("various artists", "artistes divers")
+                or top.BEST_OF.search(alb.get("title") or "")):   # best-of de l'artiste
             type_album = TYPES_ALBUM["compile"]
         return (type_album, alb.get("release_date") or "9999")
     return min(versions[:6], key=rang)

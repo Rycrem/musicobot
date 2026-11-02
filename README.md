@@ -8,6 +8,7 @@ Tout se pilote avec des commandes Discord ; le bot tourne dans Docker en permane
 ## Fonctionnalités
 
 - **`/add <lien>`** : télécharge une vidéo ou une playlist YouTube entière (audio m4a avec titre, artiste et pochette intégrés).
+- **`/chanson <titre>`** : télécharge une chanson à partir de son nom, avec ou sans l'artiste (« master of puppets », « metallica master of puppets »), sans chercher le lien YouTube. Le bot propose les chansons trouvées sur Deezer dans une liste (artiste et son nombre de fans, album, durée, lien ▶ pour écouter un extrait de 30 s sur Deezer) : la version studio d'abord, les lives et remixes à part. La chanson choisie est rangée dans `Artiste/Album/`, comme avec `/artiste`.
 - **`/artiste <nom> [nombre]`** : toute la discographie studio d'un artiste (albums complets, EP, singles, sans doublons), ou ses N titres les plus populaires. Chaque titre est pris sur son album studio d'origine, avant les singles, best-of et éditions deluxe ; les albums live et les lives, démos ou remixes des bonus sont écartés. Le bot propose d'abord les artistes trouvés sur Deezer dans une liste (vrai nom pour les artistes solo, nombre d'albums, de titres et de fans) ; une fois le bon choisi, il affiche une fiche du téléchargement (visible de toi seul) avec la photo de l'artiste et un lien vers sa chaîne YouTube. Le bouton « Annuler le téléchargement » l'arrête ; si le dossier de l'artiste a été créé par ce téléchargement, il est supprimé. Le vrai nom et la chaîne YouTube viennent de MusicBrainz, quand l'artiste y est référencé.
 - **`/top`** : top 10 du jour France, USA et Monde (classements Deezer), aussi téléchargé automatiquement chaque soir.
 - **`/suivre <lien>`** : suit une playlist ; ses nouvelles musiques sont téléchargées automatiquement (vérification toutes les 6 h).
@@ -76,8 +77,8 @@ music/
 └── Non classés/            musiques non reconnues sur Deezer
 ```
 
-- Chaque musique est reconnue sur Deezer : directement pour `/top` et `/artiste`, d'après le titre de la vidéo pour `/add` et les playlists suivies. Ses tags sont réécrits (titre, artiste, artiste de l'album, album, numéro de piste, année, genre, pochette de l'album) : Audio Station, Plex ou Jellyfin les classent correctement. Quand un morceau existe en plusieurs versions, c'est celle de l'album d'origine qui est retenue (plutôt qu'un single ou une compilation).
-- Pour `/top` et `/artiste`, la vidéo YouTube est choisie parmi les premiers résultats de recherche : celle qui a la durée du morceau Deezer, sans live ni remix si le morceau n'en est pas un, de préférence sur la chaîne de l'artiste. Si aucune ne convient, le morceau est compté en erreur et retenté la fois suivante.
+- Chaque musique est reconnue sur Deezer : directement pour `/top`, `/artiste` et `/chanson`, d'après le titre de la vidéo pour `/add` et les playlists suivies. Ses tags sont réécrits (titre, artiste, artiste de l'album, album, numéro de piste, année, genre, pochette de l'album) : Audio Station, Plex ou Jellyfin les classent correctement. Quand un morceau existe en plusieurs versions, c'est celle de l'album d'origine qui est retenue (plutôt qu'un single ou une compilation).
+- Pour `/top`, `/artiste` et `/chanson`, la vidéo YouTube est choisie parmi les premiers résultats de recherche : celle qui a la durée du morceau Deezer, sans live ni remix si le morceau n'en est pas un, de préférence sur la chaîne de l'artiste. Si aucune ne convient, le morceau est compté en erreur et retenté la fois suivante.
 - Un single n'a pas de dossier d'album : il est directement dans le dossier de l'artiste (ses tags gardent le nom et la pochette du single).
 - Le top du jour reste une catégorie à part (« Par dossier » dans Audio Station), avec les mêmes tags : ses musiques apparaissent aussi sous le bon artiste et le bon album.
 - Une musique déjà présente dans la bibliothèque (même artiste, album et titre) n'est pas gardée en double.
@@ -91,7 +92,7 @@ music/
 |---|---|
 | `bot.py` | Bot Discord : commandes, file d'attente, suivi en direct, tâches planifiées |
 | `playlist.py` | Moteur de téléchargement (yt-dlp) : reprise, sessions, gestion des blocages |
-| `top.py` | Top du jour et discographies via l'API publique de Deezer, recherche sur YouTube |
+| `top.py` | Top du jour, chansons et discographies via l'API publique de Deezer, recherche sur YouTube |
 | `bibliotheque.py` | Reconnaissance sur Deezer, tags (mutagen) et rangement par artiste / album, `/ranger` |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
