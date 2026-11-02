@@ -159,7 +159,7 @@ def details_artiste(a):
     details = [identite_artiste(a)] if identite_artiste(a) else []
     details.append(f"{a.get('nb_album', 0)} album(s)")
     if a.get("nb_titres"):
-        details.append(f"~{a['nb_titres']} titres")
+        details.append(f"~{a['nb_titres']} titres sur Deezer")
     if a.get("nb_fan"):
         details.append(f"{nombre_lisible(a['nb_fan'])} fans")
     return " · ".join(details)
@@ -298,12 +298,21 @@ class Bot(discord.Client):
             return "Annulation demandée : le téléchargement s'arrête."
         return "Ce téléchargement est déjà terminé."
 
-    async def maj_annonce(self, tache, statut, couleur, garder_bouton=False):
-        """Met à jour la fiche d'une tâche /artiste (statut, couleur). Message caché : Discord
+    async def maj_annonce(self, tache, statut, couleur, garder_bouton=False, titres=None):
+        """Met à jour la fiche d'une tâche /artiste (statut, couleur ; `titres` : nombre réel de
+        titres à la fin, à la place de l'estimation Deezer). Message caché : Discord
         n'autorise sa modification que pendant 15 min après la commande."""
         if tache.annonce is None or tache.embed is None:
             return
         tache.embed.color = couleur
+        if titres is not None:
+            nom = "Titres studio" if tache.url.endswith(":0") else "Titres"   # cle artiste:<id>:<nombre>
+            noms = [f.name for f in tache.embed.fields]
+            if "Sur Deezer" in noms:
+                tache.embed.set_field_at(noms.index("Sur Deezer"), name=nom, value=str(titres))
+            elif nom not in noms:
+                tache.embed.insert_field_at(noms.index("Albums") + 1 if "Albums" in noms else 0,
+                                            name=nom, value=str(titres))
         tache.embed.set_field_at(len(tache.embed.fields) - 1, name="Statut", value=statut, inline=False)
         kw = {} if garder_bouton else {"view": None}
         if not garder_bouton:
@@ -598,7 +607,8 @@ class Bot(discord.Client):
                     msg = court(msg, 1990)
                 await self.maj_annonce(
                     tache, f"Terminé ✅ {r['telechargees']} musique(s) téléchargée(s) · "
-                           f"{deja} déjà présente(s) · {r['erreurs']} en erreur", 0x57F287)
+                           f"{deja} déjà présente(s) · {r['erreurs']} en erreur", 0x57F287,
+                    titres=r["total"])
             except Exception as e:  # noqa: BLE001
                 dl.log(f"Échec sur {tache.url} : {e}")
                 qui = "Vérification automatique" if tache.auto else "Erreur"
@@ -636,8 +646,8 @@ def embed_artiste(a, nombre, demandeur):
         embed.add_field(name="Groupe" if a.get("type") == "Group" else "Vrai nom",
                         value="Oui" if a.get("type") == "Group" else identite_artiste(a))
     embed.add_field(name="Albums", value=str(a.get("nb_album", "—")))
-    if a.get("nb_titres"):
-        embed.add_field(name="Titres", value=f"~{a['nb_titres']}")
+    if a.get("nb_titres"):   # estimation : lives, deluxe, best-of et rééditions compris
+        embed.add_field(name="Sur Deezer", value=f"~{a['nb_titres']} titres (toutes versions)")
     if a.get("nb_fan"):
         embed.add_field(name="Fans Deezer", value=nombre_lisible(a["nb_fan"]))
     if a.get("youtube"):
