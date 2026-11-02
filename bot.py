@@ -789,13 +789,26 @@ class ControleUpdate(discord.ui.View):
 
 
 def details_chanson(c):
-    """« Album · 3:45 » (ce que Deezer fournit)."""
+    """« 1,2 M fans · Album · 3:45 » : les fans de l'artiste d'abord (le texte est coupé à 100 caractères)."""
     details = []
+    if c.get("fans_artiste"):
+        details.append(f"{nombre_lisible(c['fans_artiste'])} fans")
     if c.get("album", {}).get("title"):
         details.append(c["album"]["title"])
     if c.get("duration"):
         details.append(f"{c['duration'] // 60}:{c['duration'] % 60:02d}")
     return " · ".join(details) or "—"
+
+
+def texte_chansons(chansons):
+    """Message au-dessus de la liste : chaque chanson avec un lien vers son extrait sur Deezer."""
+    lignes = ["Quelle chanson veux-tu télécharger ? Clique sur ▶ pour écouter un extrait (30 s) :"]
+    for c in chansons:
+        nom = court(f"{c['artist']['name']} - {c['title']}", 80)
+        fans = f" · {nombre_lisible(c['fans_artiste'])} fans" if c.get("fans_artiste") else ""
+        lien = c.get("link") or f"https://www.deezer.com/track/{c['id']}"
+        lignes.append(f"[▶](<{lien}>) **{nom}**{fans}")
+    return "\n".join(lignes)
 
 
 class ChoixChanson(discord.ui.View):
@@ -1038,8 +1051,7 @@ def enregistrer_commandes(bot: Bot):
             return await repondre_suite(
                 inter, f"Aucune chanson trouvée pour « {court(titre, 60)} ». Essaie avec le nom de "
                        "l'artiste, ou donne directement le lien YouTube avec `/add`.")
-        await repondre_suite(inter, "Quelle chanson veux-tu télécharger ?",
-                             view=ChoixChanson(bot, inter, trouvees))
+        await repondre_suite(inter, texte_chansons(trouvees), view=ChoixChanson(bot, inter, trouvees))
 
     @bot.tree.command(name="verifier", description="Vérifier tout de suite les playlists suivies")
     @app_commands.guild_only()

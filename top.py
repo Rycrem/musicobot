@@ -120,7 +120,8 @@ def chercher_chansons(recherche, limite=5):
     """Chansons Deezer correspondant à `recherche` (titre, avec ou sans l'artiste), dans l'ordre
     de pertinence de Deezer. Une seule proposition par chanson et par version : la version studio
     est prise sur l'album d'origine, avant les lives, démos ou remixes (sauf si la recherche en
-    demande un : « master of puppets live »). Chaque chanson : {id, title, artist, album, duration, …}."""
+    demande un : « master of puppets live »). Chaque chanson : {id, title, artist, album, duration,
+    link, fans_artiste, …}."""
     import bibliotheque   # import ici : bibliotheque importe déjà top
     res = api(f"search/track?q={urllib.parse.quote(recherche)}&limit={limite * 5}").get("data", [])
     groupes = {}
@@ -129,7 +130,18 @@ def chercher_chansons(recherche, limite=5):
         groupes.setdefault(cle, []).append(t)
     demande = bool(bibliotheque.variantes(recherche) or AUTRES_VERSIONS.search(recherche))
     cles = list(groupes) if demande else sorted(groupes, key=lambda c: c[2])
-    return [groupes[c][0] if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
+    chansons = [groupes[c][0] if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
+    # Fans de l'artiste : pour distinguer l'original d'une reprise quand on ne connaît pas le groupe
+    fans = {}
+    for c in chansons:
+        id_artiste = c.get("artist", {}).get("id")
+        if id_artiste not in fans:
+            try:
+                fans[id_artiste] = api(f"artist/{id_artiste}").get("nb_fan")
+            except Exception:  # noqa: BLE001 — proposée quand même, sans le nombre de fans
+                fans[id_artiste] = None
+        c["fans_artiste"] = fans[id_artiste]
+    return chansons
 
 
 def nombre_titres(artiste):
