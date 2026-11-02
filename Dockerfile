@@ -19,12 +19,12 @@ ENV PYTHONUNBUFFERED=1 \
     DENO_DIR=/home/app/.cache/deno
 RUN mkdir -p /home/app/.cache && chmod -R 1777 /home/app
 WORKDIR /app
-COPY playlist.py bot.py top.py entrypoint.sh config/bot.conf.example ./
+COPY playlist.py bot.py top.py bibliotheque.py entrypoint.sh config/bot.conf.example ./
 # Les fichiers copiés depuis le NAS gardent ses permissions (souvent illisibles
 # pour l'utilisateur du dossier music) : on les rend lisibles par tous.
 RUN sed -i 's/\r$//' entrypoint.sh \
  && chmod 755 /app entrypoint.sh \
- && chmod 644 playlist.py bot.py top.py bot.conf.example
+ && chmod 644 playlist.py bot.py top.py bibliotheque.py bot.conf.example
 
 # Copie de référence : maj-code.sh détecte ce qui a changé depuis la construction
 COPY requirements.txt Dockerfile maj-code.sh /usr/local/share/yt-music/
