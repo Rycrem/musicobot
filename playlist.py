@@ -13,6 +13,7 @@ Tous les réglages se font dans docker-compose.yml (section environment).
 """
 import glob
 import os
+import pickle
 import re
 import sys
 import threading
@@ -180,6 +181,93 @@ class Suivi:
     def hook_conversion(self, d):
         if d["status"] == "started":
             self.maj(etat="Conversion / métadonnées", vitesse=None, eta=None)
+
+    # --- échange avec le processus de téléchargement (voir executer_isole) ---
+    CHAMPS_PARTAGES = ("titre", "etat", "total", "faites", "video_titre", "video_frac",
+                       "vitesse", "eta", "erreurs", "ignorees", "debut")
+
+    def etat_partage(self):
+        with self._verrou:
+            return {c: getattr(self, c) for c in self.CHAMPS_PARTAGES}
+
+
+# ---------------------------------------------------------------------------
+# Exécution dans un processus séparé
+# ---------------------------------------------------------------------------
+# yt-dlp fait de gros traitements en Python (expressions régulières et JSON sur le
+# lecteur YouTube de plusieurs Mo, extraction de playlists…) qui gardent le verrou
+# global de Python (GIL) pendant de longues secondes sur le CPU du NAS. Lancés dans un
+# simple thread, ils figent le bot Discord : « Can't keep up, websocket is 18s behind »
+# puis « L'application ne répond plus ». Dans un processus à part, le bot reste fluide.
+INTERVALLE_ETAT = 0.5   # s entre deux envois de l'avancement au bot
+
+
+def _processus_enfant(fonction, args, url, file, stop):
+    """Point d'entrée du processus de téléchargement : exécute fonction(*args, suivi),
+    envoie l'avancement au bot et applique l'annulation demandée depuis Discord."""
+    import bibliotheque   # noqa: F401 — renseigne RANGEMENT (rangement artiste / album)
+    suivi = Suivi(url)
+    fini = threading.Event()
+
+    def relais():
+        precedent = None
+        while not fini.wait(INTERVALLE_ETAT):
+            if stop.is_set() and not suivi.annule:
+                suivi.annuler()
+            etat = suivi.etat_partage()
+            if etat != precedent:
+                file.put(("etat", etat))
+                precedent = etat
+
+    threading.Thread(target=relais, daemon=True).start()
+    try:
+        resultat = ("fin", fonction(*args, suivi))
+        pickle.dumps(resultat)   # erreur claire plutôt qu'un résultat perdu en route
+    except BaseException as e:  # noqa: BLE001 — renvoyée telle quelle au bot
+        resultat = ("erreur", str(e) or type(e).__name__)
+    finally:
+        fini.set()
+    file.put(("etat", suivi.etat_partage()))
+    file.put(resultat)
+
+
+def executer_isole(fonction, args, suivi):
+    """Exécute fonction(*args, suivi) dans un processus séparé et renvoie son résultat.
+    `suivi` (côté bot) est tenu à jour pendant l'exécution ; suivi.annuler() arrête le
+    processus au plus vite. Bloquant : à appeler depuis un thread (asyncio.to_thread)."""
+    import multiprocessing
+    import queue
+    ctx = multiprocessing.get_context("spawn")   # processus neuf, sans l'état du bot
+    file, stop = ctx.Queue(), ctx.Event()
+    proc = ctx.Process(target=_processus_enfant, args=(fonction, args, suivi.url, file, stop),
+                       daemon=True, name="telechargement")
+    proc.start()
+    try:
+        while True:
+            if suivi.annule and not stop.is_set():
+                stop.set()
+            try:
+                genre, valeur = file.get(timeout=INTERVALLE_ETAT)
+            except queue.Empty:
+                if not proc.is_alive():
+                    try:   # dernier message arrivé juste avant l'arrêt du processus
+                        genre, valeur = file.get(timeout=2)
+                    except queue.Empty:
+                        raise RuntimeError(f"le processus de téléchargement s'est arrêté "
+                                           f"brutalement (code {proc.exitcode})") from None
+                else:
+                    continue
+            if genre == "etat":
+                suivi.maj(**valeur)
+            elif genre == "erreur":
+                raise RuntimeError(valeur)
+            else:
+                return valeur
+    finally:
+        proc.join(timeout=10)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
 
 
 class Journal:

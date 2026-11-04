@@ -33,6 +33,7 @@ import shutil
 import time
 import urllib.parse
 from dataclasses import dataclass, replace
+from functools import partial
 
 import discord
 from discord import app_commands
@@ -176,7 +177,8 @@ class Tache:
     salon: discord.abc.Messageable | None
     suivi: dl.Suivi
     auto: bool = False   # lancée par la vérification automatique
-    action: object = None   # fonction(suivi) à exécuter à la place de dl.telecharger(url)
+    action: object = None   # fonction(suivi) à exécuter à la place de dl.telecharger(url) ;
+                            # partial de fonctions de module (lancée dans un autre processus)
     inter: object = None    # commande Discord d'origine (réponse cachée possible 15 min)
     t_inter: float = 0.0
     annonce: object = None  # message public avec la photo de l'artiste (/artiste)
@@ -369,7 +371,7 @@ class Bot(discord.Client):
             salon = await self.salon_de(self.salon_top_id)
         ajoutes = 0
         for nom in top.noms_tops():
-            action = (lambda n: (lambda suivi: top.telecharger_top(n, suivi)))(nom)
+            action = partial(top.telecharger_top, nom)
             _, tache = await self.ajouter_tache(f"top:{nom}", auteur_id, salon, auto, action, inter)
             if tache is not None:
                 tache.nom = f"Top {nom}"
@@ -543,10 +545,9 @@ class Bot(discord.Client):
             self.en_cours = tache
             msg = None
             try:
-                if tache.action:
-                    r = await asyncio.to_thread(tache.action, tache.suivi)
-                else:
-                    r = await asyncio.to_thread(dl.telecharger, tache.url, tache.suivi)
+                # Processus séparé : yt-dlp ne peut pas figer le bot (voir dl.executer_isole)
+                action = tache.action or partial(dl.telecharger, tache.url)
+                r = await asyncio.to_thread(dl.executer_isole, action, (), tache.suivi)
                 if r.get("bloque"):
                     # YouTube bloque l'IP du NAS : on remet le lien en tête de file et on met
                     # tout en pause (les musiques déjà faites seront sautées à la reprise).
@@ -699,7 +700,7 @@ class ChoixArtiste(discord.ui.View):
         except discord.HTTPException as e:
             dl.log(f"Annonce de l'artiste impossible : {e}")
             annonce = None
-        action = lambda suivi: top.telecharger_artiste(a, self.nombre, suivi)  # noqa: E731
+        action = partial(top.telecharger_artiste, a, self.nombre)
         position, tache = await self.bot.ajouter_tache(cle, inter.user.id, inter.channel,
                                                        action=action, inter=self.inter)
         if tache is not None:
@@ -844,7 +845,7 @@ class ChoixChanson(discord.ui.View):
             return await inter.response.edit_message(content="Demande annulée.", view=None)
         c = self.chansons[valeur]
         nom = f"{c['artist']['name']} - {c['title']}"
-        action = lambda suivi: top.telecharger_chanson(c, suivi)  # noqa: E731
+        action = partial(top.telecharger_chanson, c)
         position, tache = await self.bot.ajouter_tache(f"chanson:{c['id']}", inter.user.id, inter.channel,
                                                        action=action, inter=self.inter)
         if tache is not None:
