@@ -159,6 +159,15 @@ def nombre_titres(artiste):
 def mb(chemin):
     req = urllib.request.Request(f"https://musicbrainz.org/ws/2/{chemin}",
                                  headers={"User-Agent": MB_AGENT, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code not in (502, 503):
+            raise
+    # 503 : MusicBrainz surchargé ou limite de requêtes atteinte ; un seul nouvel essai,
+    # sinon l'erreur remonte et la liste s'affiche sans ces infos (facultatives)
+    time.sleep(2)
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.load(r)
 
