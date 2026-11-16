@@ -9,3 +9,7 @@ config/playlists_suivies.json
 # Python
 __pycache__/
 *.pyc
+
+# Claude Code : configuration locale (peut contenir des secrets)
+.claude/settings.local.json
+.mcp.json
