@@ -25,6 +25,7 @@ Configuration : /config/bot.conf (voir le fichier modèle).
 Les liens sont traités un par un, dans l'ordre d'arrivée.
 """
 import asyncio
+import collections
 import itertools
 import json
 import os
@@ -37,6 +38,7 @@ from dataclasses import dataclass, replace
 import discord
 from discord import app_commands
 
+import api
 import bibliotheque   # noqa: F401 — range chaque musique téléchargée par artiste / album
 import playlist as dl
 import top
@@ -209,6 +211,8 @@ class Bot(discord.Client):
         self.prochain_top: float | None = None
         self._top: asyncio.Task | None = None
         self.annonces: dict[int, Tache] = {}   # id du message d'annonce -> tâche (bouton Annuler)
+        self.conf = conf
+        self.terminees = collections.deque(maxlen=30)   # derniers téléchargements finis (API HTTP)
 
     async def setup_hook(self):
         if self.guild_id:   # commandes disponibles immédiatement sur ce serveur
@@ -221,6 +225,7 @@ class Bot(discord.Client):
         self._verif = asyncio.create_task(self.boucle_verif())
         if TOP_HEURE:
             self._top = asyncio.create_task(self.boucle_top())
+        self._api = await api.demarrer(self, self.conf, top, dl.log)   # facultatif : API_TOKEN
 
     async def on_ready(self):
         dl.log(f"Bot connecté : {self.user} — dossier de destination {dl.DOSSIER}, format {dl.FORMAT}")
@@ -530,6 +535,19 @@ class Bot(discord.Client):
             dl.log(f"Message de fin non envoyé ({e}). Si c'est un MP : autorise les messages "
                    "privés des membres du serveur dans tes paramètres Discord.")
 
+    def noter_fin(self, tache, resultat, erreur):
+        """Garde un résumé des derniers téléchargements finis (lu par l'API HTTP)."""
+        if erreur is None and (resultat is None or resultat.get("bloque")):
+            return   # pas fini : mis en pause (blocage anti-robot) ou sans résultat
+        r = resultat or {}
+        statut = "echec" if erreur else "annule" if r.get("annule") else "termine"
+        self.terminees.appendleft({
+            "numero": tache.numero, "nom": self.nom_tache(tache), "statut": statut,
+            "telechargees": r.get("telechargees", 0), "erreurs": r.get("erreurs", 0),
+            "total": r.get("total", 0), "erreur": court(erreur, 200) if erreur else None,
+            "fin": int(time.time()),
+        })
+
     async def travailleur(self):
         while True:
             while not self.attente:
@@ -541,12 +559,13 @@ class Bot(discord.Client):
                     continue
             tache = self.attente.pop(0)
             self.en_cours = tache
-            msg = None
+            msg = resultat = erreur = None
             try:
                 if tache.action:
                     r = await asyncio.to_thread(tache.action, tache.suivi)
                 else:
                     r = await asyncio.to_thread(dl.telecharger, tache.url, tache.suivi)
+                resultat = r
                 if r.get("bloque"):
                     # YouTube bloque l'IP du NAS : on remet le lien en tête de file et on met
                     # tout en pause (les musiques déjà faites seront sautées à la reprise).
@@ -610,12 +629,14 @@ class Bot(discord.Client):
                            f"{deja} déjà présente(s) · {r['erreurs']} en erreur", 0x57F287,
                     titres=r["total"])
             except Exception as e:  # noqa: BLE001
+                erreur = str(e)
                 dl.log(f"Échec sur {tache.url} : {e}")
                 qui = "Vérification automatique" if tache.auto else "Erreur"
                 msg = f"{qui} : échec du téléchargement de <{tache.url}> : {court(str(e), 300)}"
                 await self.maj_annonce(tache, f"Échec : {court(str(e), 200)}", 0xED4245)
             finally:
                 self.en_cours = None
+                self.noter_fin(tache, resultat, erreur)
             if msg:
                 await self.prevenir(tache, msg)
 

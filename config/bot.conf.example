@@ -27,3 +27,20 @@ SALONS_AUTORISES=
 # ID du salon où annoncer le top du jour (nouvelles musiques téléchargées chaque soir).
 # Vide = aucune annonce pour le top du jour automatique.
 SALON_TOP=
+
+# ----------------------------------------------------------------------
+# API HTTP (facultatif) : permet à une application, par exemple Sillon, de chercher et lancer
+# des téléchargements sans passer par Discord. Désactivée tant que API_TOKEN est vide.
+# ----------------------------------------------------------------------
+# Jeton secret (24 caractères minimum). Pour en générer un :
+#   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# Quiconque le connaît peut lancer des téléchargements : ne le partage jamais.
+API_TOKEN=
+
+# Port d'écoute dans le conteneur (à garder aligné avec docker-compose.yml). Défaut : 8787.
+API_PORT=
+
+# HTTPS direct (facultatif, sinon utilise un reverse proxy) : chemins, dans le conteneur,
+# du certificat et de sa clé, par exemple /config/api.crt et /config/api.key.
+API_CERT=
+API_CLE=
