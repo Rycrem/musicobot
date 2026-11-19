@@ -96,14 +96,20 @@ def morceau(t):
     return (str(t["id"]), t["artist"]["name"], t["title"], t.get("duration"))
 
 
+POOL_ARTISTES = 25   # artistes lus chez Deezer avant de trier et de n'en garder que quelques-uns
+
+
 def chercher_artistes(nom, limite=5):
     """Artistes Deezer correspondant à `nom`, les plus pertinents d'abord : noms exacts
     (par nombre de fans), puis l'ordre de Deezer. Chaque artiste : {id, name, nb_fan,
     nb_album, picture_xl, link, …} + « nb_titres » (approximatif, None si inconnu)."""
-    res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit={limite}").get("data", [])
+    # Deezer classe par sa propre pertinence, pas par popularité : « Angèle » (1,7 M de fans) arrive 6e, derrière cinq
+    # homonymes à moins de 200 fans. On lit donc plus de résultats, on met les noms exacts en tête par nombre de fans,
+    # puis on ne garde que `limite` artistes (le nombre de titres, lent à calculer, ne l'est que pour ceux-là).
+    res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit={max(limite, POOL_ARTISTES)}").get("data", [])
     exact = sorted((a for a in res if cle_titre(a["name"]) == cle_titre(nom)),
-                   key=lambda a: a.get("nb_fan", 0), reverse=True)
-    artistes = exact + [a for a in res if a not in exact]
+                   key=lambda a: a.get("nb_fan") or 0, reverse=True)
+    artistes = (exact + [a for a in res if a not in exact])[:limite]
     for a in artistes:
         try:
             a["nb_titres"] = nombre_titres(a)
