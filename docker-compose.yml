@@ -36,6 +36,12 @@ services:
       TOP_HEURE: "21:00"       # top 10 du jour France / USA / Monde chaque soir ("" = désactivé)
       TOP_NOMBRE: "10"         # nombre de musiques par classement
       PAUSE_ROBOT_HEURES: "3"  # si YouTube bloque (« pas un robot ») : pause, ou reprise dès l'ajout de config/cookies.txt
+    # API HTTP pour une application (voir API_TOKEN dans config/bot.conf). Le port n'est publié que
+    # sur le NAS lui-même : un reverse proxy HTTPS (DSM : Panneau de configuration > Portail de
+    # connexion > Avancé > Proxy inversé) l'expose proprement. Pour l'ouvrir sur le réseau local
+    # sans proxy, remplace par "8787:8787" ET renseigne API_CERT / API_CLE (sinon le jeton circule en clair).
+    ports:
+      - "127.0.0.1:8787:8787"
     restart: unless-stopped
 
   # (Optionnel) téléchargement des playlists listées dans config/playlists.txt.

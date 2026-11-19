@@ -52,6 +52,30 @@ Connexion à Discord…
 Bot connecté : MonBot#1234 — dossier de destination /music, format m4a
 ```
 
+## API HTTP (pour une application mobile)
+
+Le bot peut aussi être piloté par une application, sans passer par Discord : recherche d'une chanson ou d'un
+artiste sur Deezer, téléchargement, file d'attente et annulation. L'API utilise **la même file** que les commandes
+Discord (mêmes règles de rangement, mêmes registres de doublons).
+
+- Éteinte par défaut. Pour l'activer, renseigne `API_TOKEN` dans `config/bot.conf` (24 caractères minimum, voir
+  [`bot.conf.example`](config/bot.conf.example)), puis **relance le projet** (le port est dans `docker-compose.yml`).
+- Le port `8787` n'est publié que sur le NAS lui-même (`127.0.0.1`). Pour y accéder depuis un téléphone, place un
+  reverse proxy HTTPS devant (sur DSM : Panneau de configuration → Portail de connexion → Avancé → Proxy inversé,
+  source `https://ton-nas:port`, destination `http://localhost:8787`). Sans proxy, utilise `API_CERT` / `API_CLE`.
+- Toutes les routes demandent `Authorization: Bearer <API_TOKEN>` ; un jeton refusé fait attendre 1 s la réponse.
+
+| Route | Rôle |
+|---|---|
+| `GET /api/sante` | Test de connexion (`{"ok": true, "version": 1}`) |
+| `GET /api/chansons?q=` · `POST /api/chansons {id}` | Chercher / télécharger une chanson |
+| `GET /api/artistes?q=` · `POST /api/artistes {id, nombre}` | Chercher / télécharger un artiste (`nombre` 0 = tout) |
+| `POST /api/liens {url}` | Télécharger un lien |
+| `GET /api/file` | Tâches en cours / en attente (avancement) et dernières terminées |
+| `DELETE /api/taches/<numéro>` | Annuler une tâche |
+
+Les tests tournent sans Discord : `python -m unittest discover tests`.
+
 ## Configuration
 
 | Fichier | Contenu |
@@ -93,6 +117,7 @@ music/
 | `bot.py` | Bot Discord : commandes, file d'attente, suivi en direct, tâches planifiées |
 | `playlist.py` | Moteur de téléchargement (yt-dlp) : reprise, sessions, gestion des blocages |
 | `top.py` | Top du jour, chansons et discographies via l'API publique de Deezer, recherche sur YouTube |
+| `api.py` | API HTTP facultative (application mobile), testée dans `tests/` |
 | `bibliotheque.py` | Reconnaissance sur Deezer, tags (mutagen) et rangement par artiste / album, `/ranger` |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
