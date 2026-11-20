@@ -64,7 +64,10 @@ def main(argv=None):
             os.makedirs(os.path.dirname(copie), exist_ok=True)
             if not os.path.exists(copie):
                 shutil.copy2(chemin, copie)
-        r = loudness.lisser(chemin, a.cible, a.pic, appliquer=a.appliquer)
+        try:
+            r = loudness.lisser(chemin, a.cible, a.pic, appliquer=a.appliquer)
+        except Exception as e:   # un fichier problématique ne doit pas arrêter tout le lot
+            return chemin, loudness.Resultat("echec", message=f"{type(e).__name__}: {e}")
         if r.statut in ("lisse", "a_lisser"):
             with verrou:
                 traites += 1

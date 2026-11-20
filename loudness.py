@@ -43,7 +43,8 @@ class Resultat:
 
 def _executer(args, timeout=900):
     return subprocess.run([FFMPEG, "-hide_banner", "-nostats", "-y", *args],
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=timeout)
 
 
 def mesurer(chemin):
