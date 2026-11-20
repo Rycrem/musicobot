@@ -24,6 +24,8 @@ from types import SimpleNamespace
 
 import yt_dlp
 
+import loudness
+
 
 def env_bool(nom, defaut):
     return os.environ.get(nom, str(defaut)).strip().lower() in ("1", "true", "oui", "yes")
@@ -31,6 +33,8 @@ def env_bool(nom, defaut):
 
 # ---------------- Réglages (via variables d'environnement) ----------------
 FORMAT = os.environ.get("FORMAT", "m4a").lower()          # m4a | mp3 | mp4
+NORMALISER = env_bool("NORMALISER", False)                 # lisse le volume de chaque musique (m4a / mp3)
+CIBLE_LUFS = float(os.environ.get("CIBLE_LUFS", str(loudness.CIBLE_DEFAUT)))  # niveau visé
 DOSSIER = os.environ.get("DOSSIER", "/music")              # monté sur le dossier music du NAS
 DOSSIER_TITRES = os.environ.get("DOSSIER_TITRES", "Titres")  # sous-dossier des vidéos seules
 FICHIER_PLAYLISTS = os.environ.get("FICHIER_PLAYLISTS", "/config/playlists.txt")
@@ -528,8 +532,22 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
                 fichiers.append((r["chemin"], info.get("id")))
             return [], info
 
+    class Lissage(yt_dlp.postprocessor.PostProcessor):
+        def run(self, info):
+            if suivi:
+                suivi.maj(etat="Lissage du volume")
+            try:
+                r = loudness.lisser(info["filepath"], cible=CIBLE_LUFS)
+                if r.statut == "echec":   # la musique reste telle quelle : le script de lissage la rattrapera
+                    log(f"[{titre}] Lissage du volume impossible de {os.path.basename(info['filepath'])} : {r.message}")
+            except Exception as e:  # noqa: BLE001
+                log(f"[{titre}] Lissage du volume impossible de {os.path.basename(info['filepath'])} : {e}")
+            return [], info
+
     def session():
         ydl = yt_dlp.YoutubeDL(opts)
+        if NORMALISER and FORMAT in ("m4a", "mp3"):   # avant le rangement, qui écrit ensuite les tags définitifs
+            ydl.add_post_processor(Lissage(), when="after_move")
         if RANGEMENT:
             ydl.add_post_processor(Rangement(), when="after_move")
         return ydl

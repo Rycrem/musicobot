@@ -76,6 +76,24 @@ Discord (mêmes règles de rangement, mêmes registres de doublons).
 
 Les tests tournent sans Discord : `python -m unittest discover tests`.
 
+## Lissage du volume
+
+Les audios de YouTube n'ont pas tous le même volume. Le bot peut les ramener au même niveau sonore (norme EBU R128,
+cible **-14 LUFS**, comme YouTube et Spotify) : le fichier est mesuré, puis réencodé une fois (AAC ou MP3 à 192 kb/s)
+avec un simple gain, sans écraser la dynamique. Titre, artiste, album, pochette et autres tags sont conservés. Le
+résultat est contrôlé (durée, niveau) avant de remplacer l'original ; au moindre doute, l'original reste intact.
+
+- **Nouveaux téléchargements** : dans `docker-compose.yml`, mets `NORMALISER: "1"` (désactivé par défaut) et, si tu
+  veux, `CIBLE_LUFS` (`-14`, ou `-16` pour plus doux), puis redémarre. Compte quelques secondes de plus par musique.
+- **Musiques déjà sur le NAS** : en SSH, dans le dossier du projet.
+  ```
+  docker compose run --rm playlists python normaliser_bibliotheque.py              # essai à blanc : liste, ne change rien
+  docker compose run --rm playlists python normaliser_bibliotheque.py --appliquer  # réécrit les fichiers
+  ```
+  Options : `--cible -14`, `--limite 20` (pour essayer sur quelques fichiers), `--sauvegarde /music/.avant-lissage`
+  (garde une copie de chaque original), `--parallele 2`. On peut interrompre (Ctrl+C) et relancer : les fichiers déjà au
+  bon niveau sont sautés.
+
 ## Configuration
 
 | Fichier | Contenu |
@@ -119,6 +137,7 @@ music/
 | `top.py` | Top du jour, chansons et discographies via l'API publique de Deezer, recherche sur YouTube |
 | `api.py` | API HTTP facultative (application mobile), testée dans `tests/` |
 | `bibliotheque.py` | Reconnaissance sur Deezer, tags (mutagen) et rangement par artiste / album, `/ranger` |
+| `loudness.py`, `normaliser_bibliotheque.py` | Lissage du volume (ffmpeg loudnorm) : à chaque téléchargement si `NORMALISER=1`, ou sur toute la bibliothèque avec le script |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
 | `maj-code.sh` | Mise à jour depuis GitHub à chaque démarrage du conteneur |
