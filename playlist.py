@@ -32,7 +32,7 @@ def env_bool(nom, defaut):
 
 # ---------------- Réglages (via variables d'environnement) ----------------
 FORMAT = os.environ.get("FORMAT", "m4a").lower()          # m4a | mp3 | mp4
-NORMALISER = env_bool("NORMALISER", False)                 # lisse le volume de chaque musique (m4a / mp3)
+NORMALISER = env_bool("NORMALISER", True)                  # lisse le volume de chaque musique (m4a / mp3) ; NORMALISER=0 pour couper
 CIBLE_LUFS = float(os.environ.get("CIBLE_LUFS", str(loudness.CIBLE_DEFAUT)))  # niveau visé
 DOSSIER = os.environ.get("DOSSIER", "/music")              # monté sur le dossier music du NAS
 DOSSIER_TITRES = os.environ.get("DOSSIER_TITRES", "Titres")  # sous-dossier des vidéos seules
@@ -421,7 +421,11 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
                 suivi.maj(etat="Lissage du volume")
             try:
                 r = loudness.lisser(info["filepath"], cible=CIBLE_LUFS)
-                if r.statut == "echec":   # la musique reste telle quelle : le script de lissage la rattrapera
+                if r.statut == "lisse":
+                    log(f"[{titre}] Volume lissé : {r.avant:.1f} -> {r.apres:.1f} LUFS (cible {CIBLE_LUFS:g})")
+                elif r.statut == "deja":
+                    log(f"[{titre}] Volume déjà au bon niveau ({r.avant:.1f} LUFS)")
+                elif r.statut == "echec":   # la musique reste telle quelle : le script de lissage la rattrapera
                     log(f"[{titre}] Lissage du volume impossible de {os.path.basename(info['filepath'])} : {r.message}")
             except Exception as e:  # noqa: BLE001
                 log(f"[{titre}] Lissage du volume impossible de {os.path.basename(info['filepath'])} : {e}")

@@ -83,7 +83,7 @@ cible **-14 LUFS**, comme YouTube et Spotify) : le fichier est mesuré, puis ré
 avec un simple gain, sans écraser la dynamique. Titre, artiste, album, pochette et autres tags sont conservés. Le
 résultat est contrôlé (durée, niveau) avant de remplacer l'original ; au moindre doute, l'original reste intact.
 
-- **Nouveaux téléchargements** : activé par défaut dans `docker-compose.yml` (`NORMALISER: "1"`) ; mets `"0"` pour le couper, et règle
+- **Nouveaux téléchargements** : activé par défaut (une ligne « Volume lissé : … LUFS » apparaît dans les journaux pour chaque musique) ; mets `NORMALISER: "0"` dans `docker-compose.yml` pour le couper (il faut alors recréer le conteneur), et règle
   `CIBLE_LUFS` si tu veux (`-14`, ou `-16` pour plus doux), puis redémarre. Compte quelques secondes de plus par musique.
 - **Musiques déjà sur le NAS** : en SSH, dans le dossier du projet.
   ```
