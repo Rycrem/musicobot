@@ -166,8 +166,8 @@ class TestLissage(unittest.TestCase):
         self.assertEqual(lire(c), octets)
         self.assertEqual([n for n in os.listdir(self.dossier) if n.startswith(".lissage")], [])
 
-    def test_le_gain_est_plafonne_pour_ne_jamais_saturer(self):
-        # Un fond très faible avec des claquements forts : monter jusqu'à -14 LUFS ferait saturer les pics.
+    def test_le_limiteur_garde_les_pics_sous_le_plafond(self):
+        # Fond faible avec des claquements forts : monter le volume ferait saturer sans limiteur.
         c = os.path.join(self.dossier, "pics.m4a")
         subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                         "aevalsrc='if(lt(mod(t,1),0.002),0.5,0.01*sin(2*PI*220*t))':d=10:s=44100",
@@ -176,13 +176,49 @@ class TestLissage(unittest.TestCase):
         r = loudness.lisser(c)
         self.assertEqual(r.statut, "lisse", r.message)
         apres = loudness.mesurer(c)
-        self.assertLessEqual(apres["peak"], loudness.PIC_DEFAUT + 0.2)
+        self.assertLessEqual(apres["peak"], loudness.PIC_DEFAUT + 0.5)
         self.assertGreater(apres["i"], avant["i"])
-        self.assertLess(apres["i"], -14.0)   # plafonné par les pics : la cible n'est pas atteinte, c'est voulu
+        self.assertLess(apres["i"], -14.0)   # le limiteur a un plafond de 4 dB : la cible n'est pas atteinte, c'est voulu
+
+    def test_un_titre_peu_en_dessous_de_la_cible_mais_aux_pics_eleves_est_quand_meme_releve(self):
+        # Cas réel : -16,5 LUFS avec des pics proches de 0 dB n'était pas relevé. Le limiteur le permet maintenant.
+        c = os.path.join(self.dossier, "pic_haut.m4a")
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "aevalsrc='if(lt(mod(t,0.5),0.002),0.95,0.18*sin(2*PI*220*t))':d=10:s=44100",
+                        "-c:a", "aac", "-b:a", "192k", c], check=True)
+        avant = loudness.mesurer(c)
+        self.assertLess(avant["i"], -15)
+        self.assertGreater(avant["peak"], -3)
+        r = loudness.lisser(c)
+        self.assertEqual(r.statut, "lisse", r.message)
+        apres = loudness.mesurer(c)
+        self.assertGreater(apres["i"], avant["i"] + 1.0)
+        self.assertLessEqual(apres["peak"], loudness.PIC_DEFAUT + 0.5)
+
+    def test_un_fichier_lisse_n_est_jamais_retraite_et_porte_son_marqueur(self):
+        for ext in (".m4a", ".mp3"):
+            with self.subTest(ext):
+                c = self.chemin("marque" + ext, -30)
+                self.assertIsNone(loudness.marque(c))
+                self.assertEqual(loudness.lisser(c).statut, "lisse")
+                self.assertEqual(loudness.marque(c), -14.0)
+                apres = lire(c)
+                ancien = loudness.mesurer
+                loudness.mesurer = lambda *a, **k: self.fail("ne doit même pas mesurer")
+                try:
+                    r = loudness.lisser(c)
+                finally:
+                    loudness.mesurer = ancien
+                self.assertEqual(r.statut, "deja")
+                self.assertEqual(lire(c), apres)
+                # une autre cible refait le travail
+                self.assertEqual(loudness.lisser(c, cible=-20.0).statut, "lisse")
+                self.assertEqual(loudness.marque(c), -20.0)
 
     def test_gain_pour(self):
-        self.assertAlmostEqual(loudness.gain_pour({"i": -24.0, "peak": -10.0}, -14.0, -1.5), 8.0)   # plafonné par le pic
-        self.assertAlmostEqual(loudness.gain_pour({"i": -24.0, "peak": -30.0}, -14.0, -1.5), 10.0)
+        self.assertAlmostEqual(loudness.gain_pour({"i": -24.0, "peak": -10.0}, -14.0, -1.5), 10.0)   # pics à l'aise
+        self.assertAlmostEqual(loudness.gain_pour({"i": -24.0, "peak": -3.0}, -14.0, -1.5), 5.0)     # limité par le limiteur
+        self.assertAlmostEqual(loudness.gain_pour({"i": -16.5, "peak": -1.5}, -14.0, -1.5), 2.5)     # le cas réel
         self.assertAlmostEqual(loudness.gain_pour({"i": -8.0, "peak": -0.2}, -14.0, -1.5), -6.0)
 
     def test_format_non_gere(self):
