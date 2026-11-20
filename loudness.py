@@ -2,7 +2,8 @@
 Lissage du volume : ramène chaque musique au même niveau sonore (norme EBU R128, mesure ffmpeg « ebur128 »).
 
 Les audios de YouTube n'ont pas tous le même volume. Une première lecture mesure le niveau du fichier, puis un simple gain
-l'amène à la cible, sans toucher à la dynamique ; le gain est plafonné pour que les pics ne saturent jamais.
+l'amène à la cible, sans toucher à la dynamique ; un limiteur retient les pics sous -1,5 dB quand il faut monter le volume
+(il ne rabote jamais de plus de 4 dB). Le fichier lissé porte un tag LISSAGE_LUFS : il n'est jamais retraité.
 Le fichier est réencodé une fois (AAC ou MP3 à 192 kb/s) ; titre, artiste, album, pochette et tous les autres tags
 sont recopiés à l'identique.
 
@@ -18,8 +19,8 @@ import tempfile
 from dataclasses import dataclass
 
 from mutagen import File as FichierAudio
-from mutagen.id3 import ID3, ID3NoHeaderError
-from mutagen.mp4 import MP4
+from mutagen.id3 import ID3, ID3NoHeaderError, TXXX
+from mutagen.mp4 import MP4, MP4FreeForm
 
 FFMPEG = os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg") or "ffmpeg"
 
@@ -28,6 +29,8 @@ PIC_DEFAUT = -1.5      # dB (true peak) : marge contre l'écrêtage à la conver
 TOLERANCE = 1.0        # LU : en dessous, le fichier est considéré comme déjà au bon niveau
 BITRATE = "192k"
 EXTENSIONS = (".m4a", ".mp3")
+LIMITEUR_MAX = 4.0     # dB : de combien le limiteur peut rogner les pics pour atteindre la cible
+MARQUEUR = "LISSAGE_LUFS"   # tag laissé dans le fichier lissé : il n'est jamais retraité à la même cible
 
 
 @dataclass
@@ -83,9 +86,38 @@ def _copier_tags(source, destination):
 
 
 def gain_pour(m, cible, pic):
-    """Gain (dB) qui amène [m] à la cible sans que le pic dépasse [pic] (marge de 0,5 dB pour l'encodage)."""
-    gain = cible - m["i"]
-    return min(gain, (pic - 0.5) - m["peak"], 20.0)
+    """Gain (dB) qui amène [m] à la cible. Si les pics le permettent il n'y a rien à rogner ; sinon un limiteur
+    rabote les pics, mais d'au plus [LIMITEUR_MAX] dB (au-delà, on s'arrête avant la cible plutôt que d'écraser)."""
+    marge = (pic - 0.5) - m["peak"]
+    return min(m["i"] * -1 + cible, marge + LIMITEUR_MAX, 20.0)
+
+
+def _marquer(chemin, cible):
+    """Note dans le fichier la cible à laquelle il a été lissé."""
+    valeur = f"{cible:g}"
+    if chemin.lower().endswith(".mp3"):
+        try:
+            t = ID3(chemin)
+        except ID3NoHeaderError:
+            t = ID3()
+        t.setall("TXXX:" + MARQUEUR, [TXXX(encoding=3, desc=MARQUEUR, text=valeur)])
+        t.save(chemin, v2_version=3)
+    else:
+        f = MP4(chemin)
+        if f.tags is None:
+            f.add_tags()
+        f.tags["----:com.apple.iTunes:" + MARQUEUR] = [MP4FreeForm(valeur.encode())]
+        f.save()
+
+
+def marque(chemin):
+    """Cible à laquelle le fichier a déjà été lissé, ou None."""
+    try:
+        if chemin.lower().endswith(".mp3"):
+            return float(str(ID3(chemin)["TXXX:" + MARQUEUR]))
+        return float(bytes(MP4(chemin).tags["----:com.apple.iTunes:" + MARQUEUR][0]).decode())
+    except Exception:  # noqa: BLE001 — pas de marqueur, ou fichier illisible
+        return None
 
 
 def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
@@ -93,6 +125,9 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     ext = os.path.splitext(chemin)[1].lower()
     if ext not in EXTENSIONS:
         return Resultat("ignore", message=f"format {ext or '?'} non géré")
+    deja = marque(chemin)
+    if deja is not None and abs(deja - cible) < 0.05:
+        return Resultat("deja", message="déjà lissé")   # sans même mesurer : le rattrapage d'une bibliothèque est très rapide
     try:
         m = mesurer(chemin)
     except subprocess.TimeoutExpired:
@@ -118,11 +153,15 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     os.close(fd)
     try:
         codec = ["-c:a", "libmp3lame"] if ext == ".mp3" else ["-c:a", "aac"]
-        r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", f"volume={gain:.2f}dB",
+        filtre = f"volume={gain:.2f}dB"
+        if gain > 0:   # monter le volume peut faire dépasser les pics : le limiteur les retient sous le plafond
+            filtre += f",alimiter=limit={10 ** (pic / 20):.3f}:attack=3:release=40:level=0"
+        r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", filtre,
                        "-ar", str(freq), *codec, "-b:a", BITRATE, tmp])
         if r.returncode != 0:
             return Resultat("echec", avant=avant, message="ffmpeg a échoué : " + (r.stderr.strip().splitlines() or ["?"])[-1])
         _copier_tags(chemin, tmp)
+        _marquer(tmp, cible)
         # Contrôles avant de remplacer l'original : durée identique, niveau atteint.
         nouvelle = FichierAudio(tmp).info.length
         if abs(nouvelle - duree) > max(1.5, duree * 0.01):
@@ -131,8 +170,12 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
         if controle is None:
             return Resultat("echec", avant=avant, message="résultat illisible")
         apres = controle["i"]
-        if abs(apres - (avant + gain)) > 1.5:   # le gain demandé n'a pas été obtenu : on ne remplace pas
+        # Le limiteur peut retenir un peu de volume (au plus LIMITEUR_MAX) ; au-delà, ou au-dessus, quelque chose cloche.
+        attendu = avant + gain
+        if not (attendu - (LIMITEUR_MAX if gain > 0 else 0) - 0.5 <= apres <= attendu + 1.5):
             return Resultat("echec", avant=avant, apres=apres, message=f"niveau final {apres:.1f} LUFS au lieu de {avant + gain:.1f}")
+        if controle["peak"] > pic + 0.5:   # saturation : jamais
+            return Resultat("echec", avant=avant, apres=apres, message=f"pic final {controle['peak']:.1f} dBFS au-dessus du plafond")
         shutil.copymode(chemin, tmp)
         os.replace(tmp, chemin)
         tmp = None
