@@ -85,7 +85,10 @@ résultat est contrôlé (durée, niveau) avant de remplacer l'original ; au moi
 
 - **Nouveaux téléchargements** : activé par défaut (une ligne « Volume lissé : … LUFS » apparaît dans les journaux pour chaque musique) ; mets `NORMALISER: "0"` dans `docker-compose.yml` pour le couper (il faut alors recréer le conteneur), et règle
   `CIBLE_LUFS` si tu veux (`-14`, ou `-16` pour plus doux), puis redémarre. Compte quelques secondes de plus par musique.
-- **Musiques déjà sur le NAS** : en SSH, dans le dossier du projet.
+- **Musiques déjà sur le NAS** : sans SSH, dans DSM > Container Manager > Conteneur > `yt-music-bot` > Détails >
+  Terminal > Créer > `bash`. Dans ce terminal, `cd /app` puis les commandes ci-dessous (sans `docker compose run --rm
+  playlists`). Pour que ça continue si tu fermes la fenêtre : `nohup python normaliser_bibliotheque.py --appliquer > /music/.lissage.log 2>&1 &`
+  puis `tail -f /music/.lissage.log`. Avec SSH, dans le dossier du projet :
   ```
   docker compose run --rm playlists python normaliser_bibliotheque.py              # essai à blanc : liste, ne change rien
   docker compose run --rm playlists python normaliser_bibliotheque.py --appliquer  # réécrit les fichiers

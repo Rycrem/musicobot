@@ -85,6 +85,16 @@ def _copier_tags(source, destination):
         nouveau.save()
 
 
+def _copier_proprietaire(source, destination):
+    """Le fichier lissé garde le propriétaire et le groupe de l'original (utile quand le script tourne en root,
+    par exemple depuis le terminal du conteneur : sinon le partage SMB du NAS ne pourrait plus le modifier)."""
+    try:
+        st = os.stat(source)
+        os.chown(destination, st.st_uid, st.st_gid)
+    except OSError:
+        pass   # pas root : le fichier appartient déjà au bon utilisateur
+
+
 def gain_pour(m, cible, pic):
     """Gain (dB) qui amène [m] à la cible. Si les pics le permettent il n'y a rien à rogner ; sinon un limiteur
     rabote les pics, mais d'au plus [LIMITEUR_MAX] dB (au-delà, on s'arrête avant la cible plutôt que d'écraser)."""
@@ -177,6 +187,7 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
         if controle["peak"] > pic + 0.5:   # saturation : jamais
             return Resultat("echec", avant=avant, apres=apres, message=f"pic final {controle['peak']:.1f} dBFS au-dessus du plafond")
         shutil.copymode(chemin, tmp)
+        _copier_proprietaire(chemin, tmp)
         os.replace(tmp, chemin)
         tmp = None
         return Resultat("lisse", avant=avant, apres=apres)

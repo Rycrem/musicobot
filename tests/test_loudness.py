@@ -221,6 +221,22 @@ class TestLissage(unittest.TestCase):
         self.assertAlmostEqual(loudness.gain_pour({"i": -16.5, "peak": -1.5}, -14.0, -1.5), 2.5)     # le cas réel
         self.assertAlmostEqual(loudness.gain_pour({"i": -8.0, "peak": -0.2}, -14.0, -1.5), -6.0)
 
+    def test_le_proprietaire_et_les_droits_de_l_original_sont_conserves(self):
+        c = self.chemin("droits.m4a", -30)
+        os.chmod(c, 0o664)
+        st = os.stat(c)
+        appels = []
+        ancien = os.chown
+        os.chown = lambda chemin, uid, gid: appels.append((os.path.basename(chemin), uid, gid))
+        try:
+            self.assertEqual(loudness.lisser(c).statut, "lisse")
+        finally:
+            os.chown = ancien
+        self.assertEqual(len(appels), 1)
+        self.assertTrue(appels[0][0].startswith(".lissage-"))   # appliqué au fichier temporaire, avant le remplacement
+        self.assertEqual(appels[0][1:], (st.st_uid, st.st_gid))
+        self.assertEqual(os.stat(c).st_mode & 0o777, 0o664)
+
     def test_format_non_gere(self):
         c = os.path.join(self.dossier, "x.flac")
         open(c, "wb").close()
