@@ -39,7 +39,10 @@ DOSSIERS_IGNORES = {"@eaDir", "#recycle", "#snapshot", "@Recycle", ".Trash-1000"
 # Ordre de préférence des albums Deezer : l'album d'origine plutôt qu'une compilation
 TYPES_ALBUM = top.TYPES_ALBUM
 # Variantes d'un morceau : une vidéo « Remix » ne doit pas être reconnue comme l'original
-VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustique", "cover", "demo"}
+VARIANTES = {"remix", "live", "instrumental", "karaoke", "acoustique", "cover", "demo", "acapella"}
+# « a cappella », « a capella », « acapella »… : plusieurs graphies, qu'on reconnaît ensemble. Le mot « capella » seul n'en est
+# pas une (Capella Grey est un rappeur) : il faut le « a » devant.
+A_CAPPELLA = re.compile(r"\ba\s?cap+ella\b")
 # Mots qui désignent une variante : « Wax Tour à l'Ancienne Belgique » est un live,
 # « En acustico » une version acoustique
 SYNONYMES = {"tour": "live", "concert": "live", "zenith": "live", "bercy": "live", "olympia": "live",
@@ -81,7 +84,9 @@ def base(texte, parentheses=False, feat=True):
 
 
 def variantes(texte):
-    return VARIANTES & {SYNONYMES.get(m, m) for m in re.findall(r"[a-z]+", minuscules(texte))}
+    t = minuscules(texte)
+    trouvees = VARIANTES & {SYNONYMES.get(m, m) for m in re.findall(r"[a-z]+", t)}
+    return trouvees | {"acapella"} if A_CAPPELLA.search(t) else trouvees
 
 
 def sans_variantes(texte):
