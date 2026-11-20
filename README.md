@@ -80,7 +80,7 @@ Les tests tournent sans Discord : `python -m unittest discover tests`.
 
 Les audios de YouTube n'ont pas tous le même volume. Le bot peut les ramener au même niveau sonore (norme EBU R128,
 cible **-14 LUFS**, comme YouTube et Spotify) : le fichier est mesuré, puis réencodé une fois (AAC ou MP3 à 192 kb/s)
-avec un simple gain, sans écraser la dynamique. Titre, artiste, album, pochette et autres tags sont conservés. Le
+avec un simple gain, sans écraser la dynamique ni jamais saturer les pics. Titre, artiste, album, pochette et autres tags sont conservés. Le
 résultat est contrôlé (durée, niveau) avant de remplacer l'original ; au moindre doute, l'original reste intact.
 
 - **Nouveaux téléchargements** : activé par défaut (une ligne « Volume lissé : … LUFS » apparaît dans les journaux pour chaque musique) ; mets `NORMALISER: "0"` dans `docker-compose.yml` pour le couper (il faut alors recréer le conteneur), et règle
@@ -137,7 +137,7 @@ music/
 | `top.py` | Top du jour, chansons et discographies via l'API publique de Deezer, recherche sur YouTube |
 | `api.py` | API HTTP facultative (application mobile), testée dans `tests/` |
 | `bibliotheque.py` | Reconnaissance sur Deezer, tags (mutagen) et rangement par artiste / album, `/ranger` |
-| `loudness.py`, `normaliser_bibliotheque.py` | Lissage du volume (ffmpeg loudnorm) : à chaque téléchargement si `NORMALISER=1`, ou sur toute la bibliothèque avec le script |
+| `loudness.py`, `normaliser_bibliotheque.py` | Lissage du volume (ffmpeg ebur128) : à chaque téléchargement si `NORMALISER=1`, ou sur toute la bibliothèque avec le script |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
 | `maj-code.sh` | Mise à jour depuis GitHub à chaque démarrage du conteneur |

@@ -15,8 +15,9 @@ FFMPEG = os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg")
 loudness.FFMPEG = FFMPEG or "ffmpeg"
 
 
-def fabriquer(chemin, volume_db, duree=8, freq=440):
-    """Crée un morceau de test : sinus + bruit léger au volume voulu."""
+def fabriquer(chemin, lufs, duree=8, freq=440):
+    """Crée un morceau de test (sinus + bruit léger) dont le niveau est d'environ [lufs] LUFS."""
+    volume_db = lufs + 27.7   # décalage mesuré de cette source (sinus + bruit rose mixés)
     ext = os.path.splitext(chemin)[1]
     codec = ["-c:a", "libmp3lame"] if ext == ".mp3" else ["-c:a", "aac"]
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
@@ -60,7 +61,7 @@ def tags(chemin):
 
 
 def niveau(chemin):
-    return float(loudness.mesurer(chemin)["input_i"])
+    return float(loudness.mesurer(chemin)["i"])
 
 
 def lire(chemin):
@@ -84,14 +85,14 @@ class TestLissage(unittest.TestCase):
     def test_morceau_trop_faible_remonte_a_la_cible(self):
         for ext in (".m4a", ".mp3"):
             with self.subTest(ext):
-                c = self.chemin("faible" + ext, -22)
+                c = self.chemin("faible" + ext, -30)
                 self.assertLess(niveau(c), -25)
                 r = loudness.lisser(c)
                 self.assertEqual(r.statut, "lisse", r.message)
                 self.assertAlmostEqual(niveau(c), -14.0, delta=1.5)
 
     def test_morceau_trop_fort_redescend(self):
-        c = self.chemin("fort.m4a", 6)
+        c = self.chemin("fort.m4a", -8)
         r = loudness.lisser(c)
         self.assertEqual(r.statut, "lisse", r.message)
         self.assertAlmostEqual(niveau(c), -14.0, delta=1.5)
@@ -99,27 +100,27 @@ class TestLissage(unittest.TestCase):
     def test_tags_et_pochette_conserves(self):
         for ext in (".m4a", ".mp3"):
             with self.subTest(ext):
-                c = self.chemin("tags" + ext, -22)
+                c = self.chemin("tags" + ext, -30)
                 avant = tags(c)
                 self.assertEqual(loudness.lisser(c).statut, "lisse")
                 self.assertEqual(tags(c), avant)
 
     def test_duree_conservee(self):
         from mutagen import File
-        c = self.chemin("duree.m4a", -22)
+        c = self.chemin("duree.m4a", -30)
         avant = File(c).info.length
         loudness.lisser(c)
         self.assertAlmostEqual(File(c).info.length, avant, delta=0.3)
 
     def test_deux_morceaux_de_volumes_differents_finissent_au_meme_niveau(self):
-        a = self.chemin("a.m4a", -26)
-        b = self.chemin("b.m4a", -3)
+        a = self.chemin("a.m4a", -34)
+        b = self.chemin("b.m4a", -9)
         loudness.lisser(a)
         loudness.lisser(b)
         self.assertLess(abs(niveau(a) - niveau(b)), 1.5)
 
     def test_deja_au_bon_niveau_n_est_pas_reecrit(self):
-        c = self.chemin("ok.m4a", -22)
+        c = self.chemin("ok.m4a", -30)
         loudness.lisser(c)
         octets = lire(c)
         mtime = os.stat(c).st_mtime_ns
@@ -129,7 +130,7 @@ class TestLissage(unittest.TestCase):
         self.assertEqual(os.stat(c).st_mtime_ns, mtime)
 
     def test_essai_a_blanc_ne_modifie_rien(self):
-        c = self.chemin("blanc.m4a", -22)
+        c = self.chemin("blanc.m4a", -30)
         octets = lire(c)
         r = loudness.lisser(c, appliquer=False)
         self.assertEqual(r.statut, "a_lisser")
@@ -148,7 +149,7 @@ class TestLissage(unittest.TestCase):
         self.assertEqual(loudness.lisser(silence).statut, "ignore")
 
     def test_echec_ffmpeg_laisse_l_original(self):
-        c = self.chemin("echec.m4a", -22)
+        c = self.chemin("echec.m4a", -30)
         octets = lire(c)
         ancien = loudness._executer
 
@@ -165,6 +166,25 @@ class TestLissage(unittest.TestCase):
         self.assertEqual(lire(c), octets)
         self.assertEqual([n for n in os.listdir(self.dossier) if n.startswith(".lissage")], [])
 
+    def test_le_gain_est_plafonne_pour_ne_jamais_saturer(self):
+        # Un fond très faible avec des claquements forts : monter jusqu'à -14 LUFS ferait saturer les pics.
+        c = os.path.join(self.dossier, "pics.m4a")
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "aevalsrc='if(lt(mod(t,1),0.002),0.5,0.01*sin(2*PI*220*t))':d=10:s=44100",
+                        "-c:a", "aac", "-b:a", "192k", c], check=True)
+        avant = loudness.mesurer(c)
+        r = loudness.lisser(c)
+        self.assertEqual(r.statut, "lisse", r.message)
+        apres = loudness.mesurer(c)
+        self.assertLessEqual(apres["peak"], loudness.PIC_DEFAUT + 0.2)
+        self.assertGreater(apres["i"], avant["i"])
+        self.assertLess(apres["i"], -14.0)   # plafonné par les pics : la cible n'est pas atteinte, c'est voulu
+
+    def test_gain_pour(self):
+        self.assertAlmostEqual(loudness.gain_pour({"i": -24.0, "peak": -10.0}, -14.0, -1.5), 8.0)   # plafonné par le pic
+        self.assertAlmostEqual(loudness.gain_pour({"i": -24.0, "peak": -30.0}, -14.0, -1.5), 10.0)
+        self.assertAlmostEqual(loudness.gain_pour({"i": -8.0, "peak": -0.2}, -14.0, -1.5), -6.0)
+
     def test_format_non_gere(self):
         c = os.path.join(self.dossier, "x.flac")
         open(c, "wb").close()
@@ -179,13 +199,13 @@ class TestScript(unittest.TestCase):
         os.makedirs(os.path.join(self.racine, "Artiste", "Album"))
         os.makedirs(os.path.join(self.racine, ".telechargement"))
         self.a = os.path.join(self.racine, "Artiste", "Album", "01.m4a")
-        fabriquer(self.a, -24)
+        fabriquer(self.a, -30)
         etiqueter(self.a)
         self.b = os.path.join(self.racine, "Artiste", "Album", "02.mp3")
-        fabriquer(self.b, -2)
+        fabriquer(self.b, -9)
         etiqueter(self.b)
         self.cache = os.path.join(self.racine, ".telechargement", "x.m4a")
-        fabriquer(self.cache, -24)
+        fabriquer(self.cache, -30)
 
     def test_par_defaut_c_est_un_essai_a_blanc(self):
         avant = {c: lire(c) for c in (self.a, self.b, self.cache)}

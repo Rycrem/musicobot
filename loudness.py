@@ -1,8 +1,8 @@
 """
-Lissage du volume : ramène chaque musique au même niveau sonore (norme EBU R128, ffmpeg « loudnorm »).
+Lissage du volume : ramène chaque musique au même niveau sonore (norme EBU R128, mesure ffmpeg « ebur128 »).
 
-Les audios de YouTube n'ont pas tous le même volume. Deux passes : la première mesure le niveau du fichier, la
-seconde applique un simple gain pour atteindre la cible, sans écraser la dynamique (mode linéaire, sans « pompage »).
+Les audios de YouTube n'ont pas tous le même volume. Une première lecture mesure le niveau du fichier, puis un simple gain
+l'amène à la cible, sans toucher à la dynamique ; le gain est plafonné pour que les pics ne saturent jamais.
 Le fichier est réencodé une fois (AAC ou MP3 à 192 kb/s) ; titre, artiste, album, pochette et tous les autres tags
 sont recopiés à l'identique.
 
@@ -25,7 +25,6 @@ FFMPEG = os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg") or "ffmpeg"
 
 CIBLE_DEFAUT = -14.0   # LUFS : le niveau de YouTube et Spotify
 PIC_DEFAUT = -1.5      # dB (true peak) : marge contre l'écrêtage à la conversion
-LRA_DEFAUT = 11.0
 TOLERANCE = 1.0        # LU : en dessous, le fichier est considéré comme déjà au bon niveau
 BITRATE = "192k"
 EXTENSIONS = (".m4a", ".mp3")
@@ -44,23 +43,25 @@ def _executer(args, timeout=900):
                           capture_output=True, text=True, timeout=timeout)
 
 
-def mesurer(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, lra=LRA_DEFAUT):
-    """Mesures loudnorm du fichier (dict de chaînes), ou None si illisible ou silencieux."""
-    r = _executer(["-i", chemin, "-vn", "-af", f"loudnorm=I={cible}:TP={pic}:LRA={lra}:print_format=json",
-                   "-f", "null", "-"])
+def mesurer(chemin):
+    """Niveau du fichier : {"i": loudness intégré en LUFS, "peak": pic d'échantillon en dBFS}, ou None si illisible
+    ou silencieux. Filtre ebur128 : une simple lecture du fichier, bien plus légère que loudnorm (qui suréchantillonne
+    à 192 kHz et ralentit beaucoup un NAS)."""
+    r = _executer(["-i", chemin, "-vn", "-af", "ebur128=peak=sample:framelog=quiet", "-f", "null", "-"])
     if r.returncode != 0:
         return None
-    blocs = re.findall(r"\{[^{}]*\}", r.stderr)
-    if not blocs:
+    resume = r.stderr[r.stderr.rfind("Summary:"):] if "Summary:" in r.stderr else ""
+    i = re.search(r"\bI:\s+(-?[\d.]+|-inf)\s+LUFS", resume)
+    pic = re.findall(r"\bPeak:\s+(-?[\d.]+|-inf)\s+dBFS", resume)
+    if not i or not pic:
         return None
     try:
-        m = json.loads(blocs[-1])
-        if float(m["input_i"]) == float("-inf"):
-            return None
-        float(m["input_tp"]), float(m["input_lra"]), float(m["input_thresh"]), float(m["target_offset"])
-    except (ValueError, KeyError):
+        niveau, crete = float(i.group(1)), float(pic[-1])
+    except ValueError:
         return None
-    return m
+    if niveau == float("-inf") or niveau <= -70:
+        return None
+    return {"i": niveau, "peak": crete}
 
 
 def _copier_tags(source, destination):
@@ -81,19 +82,26 @@ def _copier_tags(source, destination):
         nouveau.save()
 
 
-def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, lra=LRA_DEFAUT, appliquer=True):
+def gain_pour(m, cible, pic):
+    """Gain (dB) qui amène [m] à la cible sans que le pic dépasse [pic] (marge de 0,5 dB pour l'encodage)."""
+    gain = cible - m["i"]
+    return min(gain, (pic - 0.5) - m["peak"], 20.0)
+
+
+def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     """Lisse le volume de [chemin]. Avec appliquer=False, ne fait que mesurer (essai à blanc)."""
     ext = os.path.splitext(chemin)[1].lower()
     if ext not in EXTENSIONS:
         return Resultat("ignore", message=f"format {ext or '?'} non géré")
     try:
-        m = mesurer(chemin, cible, pic, lra)
+        m = mesurer(chemin)
     except subprocess.TimeoutExpired:
         return Resultat("echec", message="mesure trop longue")
     if m is None:
         return Resultat("ignore", message="illisible ou silencieux")
-    avant = float(m["input_i"])
-    if abs(avant - cible) <= TOLERANCE and float(m["input_tp"]) <= pic + 0.5:
+    avant = m["i"]
+    gain = gain_pour(m, cible, pic)
+    if abs(gain) <= TOLERANCE:   # déjà au bon niveau (ou impossible de monter plus sans écrêter)
         return Resultat("deja", avant=avant)
     if not appliquer:
         return Resultat("a_lisser", avant=avant)
@@ -109,12 +117,8 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, lra=LRA_DEFAUT, appliquer
     fd, tmp = tempfile.mkstemp(prefix=".lissage-", suffix=ext, dir=dossier)
     os.close(fd)
     try:
-        filtre = (f"loudnorm=I={cible}:TP={pic}:LRA={lra}:measured_I={m['input_i']}:measured_TP={m['input_tp']}"
-                  f":measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}"
-                  f":offset={m['target_offset']}:linear=true")
         codec = ["-c:a", "libmp3lame"] if ext == ".mp3" else ["-c:a", "aac"]
-        # loudnorm travaille à 192 kHz en interne : on remet la fréquence d'origine.
-        r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", filtre,
+        r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", f"volume={gain:.2f}dB",
                        "-ar", str(freq), *codec, "-b:a", BITRATE, tmp])
         if r.returncode != 0:
             return Resultat("echec", avant=avant, message="ffmpeg a échoué : " + (r.stderr.strip().splitlines() or ["?"])[-1])
@@ -123,12 +127,12 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, lra=LRA_DEFAUT, appliquer
         nouvelle = FichierAudio(tmp).info.length
         if abs(nouvelle - duree) > max(1.5, duree * 0.01):
             return Resultat("echec", avant=avant, message=f"durée anormale ({nouvelle:.1f} s au lieu de {duree:.1f} s)")
-        controle = mesurer(tmp, cible, pic, lra)
+        controle = mesurer(tmp)
         if controle is None:
             return Resultat("echec", avant=avant, message="résultat illisible")
-        apres = float(controle["input_i"])
-        if abs(apres - cible) > 2.0:   # loudnorm n'a pas pu atteindre la cible (dynamique trop grande, par exemple)
-            return Resultat("echec", avant=avant, apres=apres, message=f"niveau final {apres:.1f} LUFS, trop loin de la cible")
+        apres = controle["i"]
+        if abs(apres - (avant + gain)) > 1.5:   # le gain demandé n'a pas été obtenu : on ne remplace pas
+            return Resultat("echec", avant=avant, apres=apres, message=f"niveau final {apres:.1f} LUFS au lieu de {avant + gain:.1f}")
         shutil.copymode(chemin, tmp)
         os.replace(tmp, chemin)
         tmp = None
