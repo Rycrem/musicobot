@@ -97,19 +97,32 @@ def morceau(t):
 
 
 POOL_ARTISTES = 25   # artistes lus chez Deezer avant de trier et de n'en garder que quelques-uns
+BONUS_NOM_EXACT = 3.0   # un nom exact vaut 3 fois sa popularité : il passe devant un nom partiel, sauf s'il est bien moins connu
+BONUS_NOM_PARTIEL = 1.0   # le nom contient les mots cherchés (« Adèle Castillon » pour « Adèle »)
+
+
+def score_artiste(artiste, nom):
+    """Clé de tri d'un artiste pour la recherche `nom` (plus grand = plus pertinent) : d'abord ceux dont le nom correspond
+    (exact, ou contenant les mots tapés), jamais les autres (« Los Angeles Azules » pour « Angèle ») ; puis, parmi eux,
+    la popularité (fans) pondérée par la ressemblance du nom. Deezer ne tient pas compte de la popularité, d'où ce calcul."""
+    cherche = cle_titre(nom)
+    trouve = cle_titre(artiste["name"])
+    fans = (artiste.get("nb_fan") or 0) + 1
+    if trouve == cherche:
+        return (1, fans * BONUS_NOM_EXACT)
+    if set(cherche.split()) <= set(trouve.split()):
+        return (1, fans * BONUS_NOM_PARTIEL)
+    return (0, fans)
 
 
 def chercher_artistes(nom, limite=5):
-    """Artistes Deezer correspondant à `nom`, les plus pertinents d'abord : noms exacts
-    (par nombre de fans), puis l'ordre de Deezer. Chaque artiste : {id, name, nb_fan,
-    nb_album, picture_xl, link, …} + « nb_titres » (approximatif, None si inconnu)."""
-    # Deezer classe par sa propre pertinence, pas par popularité : « Angèle » (1,7 M de fans) arrive 6e, derrière cinq
-    # homonymes à moins de 200 fans. On lit donc plus de résultats, on met les noms exacts en tête par nombre de fans,
-    # puis on ne garde que `limite` artistes (le nombre de titres, lent à calculer, ne l'est que pour ceux-là).
+    """Artistes Deezer correspondant à `nom`, les plus pertinents d'abord. Deezer classe par pertinence, pas par
+    popularité : « Angèle » (1,7 M de fans) arrive 6e, derrière cinq homonymes à moins de 200 fans, et « Adèle » met
+    Adele (15 M) en 7e. On lit donc plus de résultats, on les classe par popularité pondérée par la ressemblance du nom
+    (voir `score_artiste`), puis on garde `limite` artistes : le nombre de titres, lent à calculer, ne l'est que pour eux.
+    Chaque artiste : {id, name, nb_fan, nb_album, picture_xl, link, …} + « nb_titres » (approximatif, None si inconnu)."""
     res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit={max(limite, POOL_ARTISTES)}").get("data", [])
-    exact = sorted((a for a in res if cle_titre(a["name"]) == cle_titre(nom)),
-                   key=lambda a: a.get("nb_fan") or 0, reverse=True)
-    artistes = (exact + [a for a in res if a not in exact])[:limite]
+    artistes = sorted(res, key=lambda a: score_artiste(a, nom), reverse=True)[:limite]   # tri stable : égalité = ordre de Deezer
     for a in artistes:
         try:
             a["nb_titres"] = nombre_titres(a)
