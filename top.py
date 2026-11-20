@@ -136,7 +136,14 @@ def chercher_chansons(recherche, limite=5):
         groupes.setdefault(cle, []).append(t)
     demande = bool(bibliotheque.variantes(recherche) or AUTRES_VERSIONS.search(recherche))
     cles = list(groupes) if demande else sorted(groupes, key=lambda c: c[2])
-    chansons = [groupes[c][0] if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
+    voulues = bibliotheque.variantes(recherche)
+
+    def version_demandee(groupe):
+        """Un groupe d'« autres versions » (live, a cappella, instrumental…) n'est affiché qu'une fois : on y prend celle que la
+        recherche demande (« … a cappella »), sinon la première."""
+        return max(groupe, key=lambda t: len(bibliotheque.variantes(annotation(t["title"])) & voulues))
+
+    chansons = [version_demandee(groupes[c]) if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
     # Fans de l'artiste : pour distinguer l'original d'une reprise quand on ne connaît pas le groupe
     fans = {}
     for c in chansons:
