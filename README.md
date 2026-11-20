@@ -83,8 +83,8 @@ cible **-14 LUFS**, comme YouTube et Spotify) : le fichier est mesuré, puis ré
 avec un simple gain, sans écraser la dynamique. Titre, artiste, album, pochette et autres tags sont conservés. Le
 résultat est contrôlé (durée, niveau) avant de remplacer l'original ; au moindre doute, l'original reste intact.
 
-- **Nouveaux téléchargements** : dans `docker-compose.yml`, mets `NORMALISER: "1"` (désactivé par défaut) et, si tu
-  veux, `CIBLE_LUFS` (`-14`, ou `-16` pour plus doux), puis redémarre. Compte quelques secondes de plus par musique.
+- **Nouveaux téléchargements** : activé par défaut dans `docker-compose.yml` (`NORMALISER: "1"`) ; mets `"0"` pour le couper, et règle
+  `CIBLE_LUFS` si tu veux (`-14`, ou `-16` pour plus doux), puis redémarre. Compte quelques secondes de plus par musique.
 - **Musiques déjà sur le NAS** : en SSH, dans le dossier du projet.
   ```
   docker compose run --rm playlists python normaliser_bibliotheque.py              # essai à blanc : liste, ne change rien
