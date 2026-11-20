@@ -17,7 +17,7 @@ x-reglages: &reglages
   MAJ_AUTO: "1"              # 1 = récupère les nouveautés GitHub à chaque démarrage ; 0 = désactivé
   MAJ_BRANCHE: main          # branche suivie (ex. ugreen pour une branche propre à ton NAS)
   FORMAT: m4a                # m4a (rapide) | mp3 | mp4
-  NORMALISER: "0"            # 1 = lisse le volume de chaque musique (réencode une fois, un peu plus lent)
+  NORMALISER: "1"            # 1 = lisse le volume de chaque musique (réencode une fois, un peu plus lent) ; 0 = désactivé
   CIBLE_LUFS: "-14"          # niveau visé par le lissage (-14 = YouTube / Spotify ; -16 = plus doux)
   SEULEMENT_MA_CHAINE: "0"   # 0 = télécharge toutes les vidéos ; 1 = seulement celles de ta chaîne
   TZ: Europe/Paris
