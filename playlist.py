@@ -398,22 +398,51 @@ class AucuneVideo(RuntimeError):
 
 
 def choisir_video(entree, journal):
-    """Recherche « ytsearchN:… » : URL du résultat désigné par entree["choisir"] (ex. celui qui
-    a la durée du morceau Deezer)."""
+    """Recherches « ytsearchN:… » / YouTube Music : URL du résultat désigné par entree["choisir"]
+    (ex. celui qui a la durée du morceau Deezer).
+
+    entree["recherches"] = [(url, choisir, secours), ...] : essayées dans l'ordre, jusqu'à ce
+    qu'une trouve un résultat. choisir(resultats, detail) reçoit les résultats rapides de la
+    recherche et une fonction detail(resultat) qui lit la fiche complète d'une vidéo (durée,
+    chaîne, description) pour les recherches YouTube Music, dont les résultats n'ont que le titre.
+    Une recherche « secours » (YouTube Music) échoue en silence : on passe à la suivante.
+    Sans « recherches » : une seule, entree["url"] et entree["choisir"]."""
+    recherches = entree.get("recherches") or [(entree["url"], entree["choisir"], False)]
     # Recherche silencieuse dans les journaux ; ses erreurs comptent comme celles du téléchargement
     discret = SimpleNamespace(debug=lambda msg: None, info=lambda msg: None,
                               warning=journal.warning, error=journal.error)
-    ydl = yt_dlp.YoutubeDL(options_communes(journal) | {"extract_flat": True, "logger": discret})
-    try:
-        info = ydl.extract_info(entree["url"], download=False)
-    finally:
-        fermer(ydl)
-    if not info:   # erreur YouTube, déjà notée dans le journal
-        return None
-    choisie = entree["choisir"]([e for e in info.get("entries") or [] if e])
-    if not choisie:
-        raise AucuneVideo("aucun résultat YouTube ne correspond au morceau (live, remix ou durée différente)")
-    return url_video(choisie)
+    muet = SimpleNamespace(debug=lambda msg: None, info=lambda msg: None,
+                           warning=lambda msg: None, error=lambda msg: journal.info(f"(recherche) {msg}"))
+    for url, choisir, secours in recherches:
+        logger = muet if secours else discret
+        ydl = yt_dlp.YoutubeDL(options_communes(journal) | {"extract_flat": True, "logger": logger})
+
+        info = None
+
+        def detail(resultat, ydl=ydl):
+            if not resultat.get("id"):
+                return None
+            try:   # process=False : fiche de la vidéo sans choisir de format
+                return ydl.extract_info(f"https://www.youtube.com/watch?v={resultat['id']}",
+                                        download=False, process=False)
+            except Exception:  # noqa: BLE001 — vidéo illisible : candidat écarté
+                return None
+        try:
+            info = ydl.extract_info(url, download=False)
+            choisie = choisir([e for e in (info or {}).get("entries") or [] if e], detail) if info else None
+        except Exception as e:  # noqa: BLE001
+            if not secours:
+                raise
+            journal.info(f"(recherche YouTube Music indisponible : {e})")
+            choisie = None
+        finally:
+            fermer(ydl)
+        if choisie:
+            return f"https://www.youtube.com/watch?v={choisie['id']}" if choisie.get("id") else url_video(choisie)
+        if not info and not secours:   # erreur YouTube, déjà notée dans le journal
+            return None
+    raise AucuneVideo("aucune version studio fiable trouvée sur YouTube (live, clip, "
+                      "remix ou durée différente du morceau Deezer) : non téléchargé")
 
 
 def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
