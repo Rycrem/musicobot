@@ -29,7 +29,9 @@ PIC_DEFAUT = -1.5      # dB (true peak) : marge contre l'écrêtage à la conver
 TOLERANCE = 1.0        # LU : en dessous, le fichier est considéré comme déjà au bon niveau
 BITRATE = "192k"
 EXTENSIONS = (".m4a", ".mp3")
-LIMITEUR_MAX = 4.0     # dB : de combien le limiteur peut rogner les pics pour atteindre la cible
+LIMITEUR_MAX = 4.0   # dB : de combien le limiteur peut rogner les pics pour atteindre la cible
+MARGE_ENCODAGE = 1.0   # dB de marge sous le plafond pour le réencodage
+PIC_MAX_FINAL = -0.3   # pic d'échantillon maximal accepté après réencodage (dBFS)
 MARQUEUR = "LISSAGE_LUFS"   # tag laissé dans le fichier lissé : il n'est jamais retraité à la même cible
 
 
@@ -165,8 +167,10 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     try:
         codec = ["-c:a", "libmp3lame"] if ext == ".mp3" else ["-c:a", "aac"]
         filtre = f"volume={gain:.2f}dB"
-        if gain > 0:   # monter le volume peut faire dépasser les pics : le limiteur les retient sous le plafond
-            filtre += f",alimiter=limit={10 ** (pic / 20):.3f}:attack=3:release=40:level=0"
+        # Limiteur toujours actif : il retient les pics (même quand on baisse le volume, car certains titres très
+        # compressés dépassent 0 dBFS une fois décodés) un cran sous le plafond, pour laisser de la marge au
+        # réencodage AAC/MP3, qui peut ajouter ~1 dB de dépassement.
+        filtre += f",alimiter=limit={10 ** ((pic - MARGE_ENCODAGE) / 20):.3f}:attack=3:release=40:level=0"
         r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", filtre,
                        "-ar", str(freq), *codec, "-b:a", BITRATE, tmp])
         if r.returncode != 0:
@@ -185,7 +189,7 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
         attendu = avant + gain
         if not (attendu - (LIMITEUR_MAX if gain > 0 else 0) - 0.5 <= apres <= attendu + 1.5):
             return Resultat("echec", avant=avant, apres=apres, message=f"niveau final {apres:.1f} LUFS au lieu de {avant + gain:.1f}")
-        if controle["peak"] > pic + 0.5:   # saturation : jamais
+        if controle["peak"] > PIC_MAX_FINAL:   # saturation franche : jamais
             return Resultat("echec", avant=avant, apres=apres, message=f"pic final {controle['peak']:.1f} dBFS au-dessus du plafond")
         shutil.copymode(chemin, tmp)
         _copier_proprietaire(chemin, tmp)
