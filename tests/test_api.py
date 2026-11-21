@@ -70,9 +70,19 @@ class FauxMoteur:
         return [{"id": 27, "name": "Daft Punk", "nb_album": 12, "nb_titres": 140, "nb_fan": 4_000_000,
                  "picture_medium": "https://p/a.jpg", "type": "Group"}]
 
+    def chercher_albums(self, q, limite):
+        self.recherches.append(("albums", q, limite))
+        return [{"id": 302127, "title": "Discovery", "artist": {"name": "Daft Punk"}, "nb_tracks": 14,
+                 "cover_medium": "https://c/d.jpg", "record_type": "album", "release_date": "2001-03-12"}]
+
+    def telecharger_album(self, a, suivi):
+        return {}
+
     def api(self, chemin):
         if chemin.endswith("/999"):
             return {"error": {"type": "DataException"}}
+        if chemin.startswith("album/"):
+            return {"id": int(chemin.split("/")[1]), "title": "Discovery", "artist": {"name": "Daft Punk"}}
         if chemin.startswith("track/"):
             return {"id": int(chemin.split("/")[1]), "title": "One More Time", "artist": {"name": "Daft Punk"}}
         return {"id": int(chemin.split("/")[1]), "name": "Daft Punk"}
@@ -131,6 +141,26 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Daft Punk", a["nom"])
         self.assertTrue(a["groupe"])
         self.assertEqual(140, a["titres"])
+
+    async def test_recherche_albums(self):
+        r = await self.client.get("/api/albums", params={"q": "discovery"}, headers=ENTETE)
+        self.assertEqual(200, r.status)
+        a = (await r.json())["resultats"][0]
+        self.assertEqual({"id": "302127", "titre": "Discovery", "artiste": "Daft Punk", "pochette": "https://c/d.jpg",
+                          "titres": 14, "type": "album", "annee": "2001",
+                          "lien": "https://www.deezer.com/album/302127"}, a)
+        r = await self.client.get("/api/albums", params={"q": "a"}, headers=ENTETE)
+        self.assertEqual(400, r.status)
+
+    async def test_telecharger_album_puis_doublon(self):
+        r = await self.client.post("/api/albums", json={"id": "302127"}, headers=ENTETE)
+        self.assertEqual(202, r.status)
+        self.assertEqual("Daft Punk - Discovery", (await r.json())["nom"])
+        self.assertEqual("album:302127", self.bot.attente[0].url)
+        self.assertEqual(409, (await self.client.post("/api/albums", json={"id": 302127}, headers=ENTETE)).status)
+        for corps in ({}, {"id": "abc"}, {"id": "1; ls"}):
+            self.assertEqual(400, (await self.client.post("/api/albums", json=corps, headers=ENTETE)).status, corps)
+        self.assertEqual(404, (await self.client.post("/api/albums", json={"id": "999"}, headers=ENTETE)).status)
 
     async def test_telecharger_chanson_puis_doublon(self):
         r = await self.client.post("/api/chansons", json={"id": "3135556"}, headers=ENTETE)

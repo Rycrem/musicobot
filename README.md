@@ -69,6 +69,7 @@ Discord (mêmes règles de rangement, mêmes registres de doublons).
 |---|---|
 | `GET /api/sante` | Test de connexion (`{"ok": true, "version": 1}`) |
 | `GET /api/chansons?q=` · `POST /api/chansons {id}` | Chercher / télécharger une chanson |
+| `GET /api/albums?q=` · `POST /api/albums {id}` | Chercher / télécharger un album entier |
 | `GET /api/artistes?q=` · `POST /api/artistes {id, nombre}` | Chercher / télécharger un artiste (`nombre` 0 = tout) |
 | `POST /api/liens {url}` | Télécharger un lien |
 | `GET /api/file` | Tâches en cours / en attente (avancement) et dernières terminées |

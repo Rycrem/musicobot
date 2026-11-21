@@ -157,6 +157,22 @@ def chercher_chansons(recherche, limite=5):
     return chansons
 
 
+def chercher_albums(recherche, limite=6):
+    """Albums Deezer correspondant à `recherche` (titre, avec ou sans l'artiste), dans l'ordre de pertinence de
+    Deezer. Un seul résultat par album : la version standard est préférée aux éditions deluxe, live ou remix du
+    même titre. Chaque album : {id, title, artist, cover_medium, nb_tracks, record_type, link, …}."""
+    res = api(f"search/album?q={urllib.parse.quote(recherche)}&limit={limite * 4}").get("data", [])
+    groupes = {}
+    for a in res:
+        cle = (str((a.get("artist") or {}).get("id")), cle_titre(a["title"]))
+        groupes.setdefault(cle, []).append(a)
+    albums = []
+    for groupe in groupes.values():
+        # La version sans mention d'édition passe devant ; à défaut, la première de Deezer.
+        albums.append(min(groupe, key=lambda a: (autre_version(a["title"]), bool(EDITION_BONUS.search(a["title"])))))
+    return albums[:limite]
+
+
 def nombre_titres(artiste):
     """Nombre approximatif de titres d'un artiste : somme des pistes de ses albums, EP
     et singles trouvés par la recherche Deezer (les rééditions sont comptées en double)."""
@@ -393,6 +409,26 @@ def telecharger_chanson(chanson, suivi=None):
     if suivi:
         suivi.maj(titre=titre)
     return telecharger_morceaux(titre, [morceau(chanson)], suivi, f"chanson:{chanson['id']}")
+
+
+def telecharger_album(album, suivi=None):
+    """`album` = fiche Deezer d'un album (chercher_albums ou GET album/<id>). Tous ses titres, rangés dans
+    Artiste/Album avec les tags et la pochette de Deezer ; ceux déjà téléchargés sont sautés."""
+    nom_artiste = (album.get("artist") or {}).get("name", "")
+    titre = f"{nom_artiste} - {album['title']}" if nom_artiste else album["title"]
+    if suivi:
+        suivi.maj(titre=titre, etat="Lecture de l'album sur Deezer")
+    pistes = api_pages(f"album/{album['id']}/tracks?limit=200")
+    if not pistes:
+        raise RuntimeError(f"aucun titre trouvé pour l'album « {album['title']} » sur Deezer")
+    if suivi and suivi.annule:
+        return {"titre": titre, "total": len(pistes), "telechargees": 0, "ignorees": 0, "erreurs": 0,
+                "echecs": [], "index_echecs": [], "deja": 0, "annule": True}
+    morceaux = []
+    for t in pistes:
+        t.setdefault("artist", album.get("artist") or {"name": nom_artiste})   # les pistes d'album n'ont pas toujours l'artiste
+        morceaux.append(morceau(t))
+    return telecharger_morceaux(titre, morceaux, suivi, f"album:{album['id']}")
 
 
 # ---------------------------------------------------------------------------
