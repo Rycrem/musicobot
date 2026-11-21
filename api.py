@@ -22,6 +22,7 @@ VERSION_API = 1
 TOKEN_MIN = 24                    # un jeton plus court est refusé : l'API reste éteinte
 NB_CHANSONS = 8
 NB_ARTISTES = 5
+NB_ALBUMS = 6
 RECHERCHE_MAX = 100
 REGEX_LIEN = re.compile(r"^https?://\S+$")
 REGEX_ID = re.compile(r"^\d{1,12}$")
@@ -65,6 +66,16 @@ def vue_artiste(a):
         "id": str(a["id"]), "nom": a.get("name", ""), "vrai_nom": a.get("vrai_nom"),
         "groupe": a.get("type") == "Group", "albums": a.get("nb_album"),
         "titres": a.get("nb_titres"), "fans": a.get("nb_fan"), "photo": a.get("picture_medium"),
+    }
+
+
+def vue_album(a):
+    artiste = a.get("artist") or {}
+    return {
+        "id": str(a["id"]), "titre": a.get("title", ""), "artiste": artiste.get("name", ""),
+        "pochette": a.get("cover_medium"), "titres": a.get("nb_tracks"), "type": a.get("record_type"),
+        "annee": (a.get("release_date") or "")[:4] or None,
+        "lien": a.get("link") or f"https://www.deezer.com/album/{a['id']}",
     }
 
 
@@ -117,6 +128,16 @@ def creer_app(bot, token, moteur, log=print):
             return _erreur(f"Recherche impossible sur Deezer : {e}", 502)
         return _json({"resultats": [vue_artiste(a) for a in trouves]})
 
+    async def chercher_albums(requete):
+        q = requete.query.get("q", "").strip()
+        if not 2 <= len(q) <= RECHERCHE_MAX:
+            return _erreur("Recherche trop courte ou trop longue.", 400)
+        try:
+            trouves = await asyncio.to_thread(moteur.chercher_albums, q, NB_ALBUMS)
+        except Exception as e:  # noqa: BLE001
+            return _erreur(f"Recherche impossible sur Deezer : {e}", 502)
+        return _json({"resultats": [vue_album(a) for a in trouves]})
+
     async def _lancer(cle, nom, action):
         position, tache = await bot.ajouter_tache(cle, 0, None, action=action)
         if position is None:
@@ -142,6 +163,21 @@ def creer_app(bot, token, moteur, log=print):
             return _erreur("Chanson introuvable sur Deezer.", 404)
         nom = f"{c['artist']['name']} - {c['title']}"
         return await _lancer(f"chanson:{c['id']}", nom, partial(moteur.telecharger_chanson, c))
+
+    async def telecharger_album(requete):
+        corps = await _corps(requete)
+        id_ = str((corps or {}).get("id", ""))
+        if not REGEX_ID.match(id_):
+            return _erreur("Identifiant d'album invalide.", 400)
+        try:
+            a = await _fiche_deezer("album", id_)
+        except Exception as e:  # noqa: BLE001
+            return _erreur(f"Deezer injoignable : {e}", 502)
+        if a is None:
+            return _erreur("Album introuvable sur Deezer.", 404)
+        artiste = (a.get("artist") or {}).get("name", "")
+        nom = f"{artiste} - {a['title']}" if artiste else a["title"]
+        return await _lancer(f"album:{a['id']}", nom, lambda suivi: moteur.telecharger_album(a, suivi))
 
     async def telecharger_artiste(requete):
         corps = await _corps(requete) or {}
@@ -196,6 +232,8 @@ def creer_app(bot, token, moteur, log=print):
         web.get("/api/sante", sante),
         web.get("/api/chansons", chercher_chansons),
         web.post("/api/chansons", telecharger_chanson),
+        web.get("/api/albums", chercher_albums),
+        web.post("/api/albums", telecharger_album),
         web.get("/api/artistes", chercher_artistes),
         web.post("/api/artistes", telecharger_artiste),
         web.post("/api/liens", telecharger_lien),
