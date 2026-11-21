@@ -309,6 +309,9 @@ def noter(ids_titres):
 # introduction, une version live ou une version longue dure presque toujours plus longtemps
 TOLERANCE_DUREE = int(os.environ.get("TOLERANCE_DUREE", "3"))
 CANDIDATS_MUSIC = 3   # chansons YouTube Music examinées en détail pour chaque morceau
+# Recherche YouTube de secours : une vidéo hors de la chaîne de l'artiste doit avoir au moins
+# ce nombre de vues (les mises en ligne confidentielles sont souvent accélérées, coupées…)
+VUES_MIN = int(os.environ.get("VUES_MIN", "1000"))
 # Ce qui, dans un titre de vidéo ou un nom d'album, désigne autre chose que le morceau studio
 # (en plus des lives, remixes, démos… de bibliotheque.VARIANTES) ; ignoré si Deezer l'a aussi
 NON_STUDIO = re.compile(
@@ -348,7 +351,7 @@ def choix_music(artiste, titre, duree):
     attendus = marqueurs(titre)
 
     def choisir(resultats, detail):
-        examines = 0
+        examines, valides = 0, []
         for r in resultats:
             if examines >= CANDIDATS_MUSIC:
                 break
@@ -367,30 +370,40 @@ def choix_music(artiste, titre, duree):
                     and not (marqueurs(album) | marqueurs(v.get("track") or v.get("title") or "")) - attendus
                     and meme_artiste(artiste, v.get("channel"), v.get("artist"), v.get("creator"),
                                      *(v.get("artists") or []), *(v.get("creators") or []))):
-                dl.log(f"  YouTube Music : {v.get('title')} ({v.get('channel')}, album « {album} », "
-                       f"{v.get('duration')} s / Deezer {duree} s)")
-                return v
-        return None
+                valides.append(v)
+        if not valides:
+            return None
+        # Plusieurs pistes valides (album et single, réédition…) : la plus écoutée
+        v = max(valides, key=lambda x: x.get("view_count") or 0)
+        dl.log(f"  YouTube Music : {v.get('title')} ({v.get('channel')}, album « {v.get('album') or ''} », "
+               f"{v.get('duration')} s / Deezer {duree} s, {v.get('view_count') or '?'} vues)")
+        return v
     return choisir
 
 
 def choix_video(artiste, titre, duree):
     """Recherche YouTube classique, si YouTube Music n'a rien donné : un résultat dont le titre
     contient celui du morceau, sans live, clip, paroles, remix… (sauf si Deezer le dit aussi),
-    et à TOLERANCE_DUREE secondes près de la durée Deezer ; de préférence sur la chaîne de
-    l'artiste. Aucun résultat sûr : None (morceau non téléchargé, retenté la fois suivante)."""
+    et à TOLERANCE_DUREE secondes près de la durée Deezer ; hors de la chaîne de l'artiste,
+    au moins VUES_MIN vues. De préférence sur la chaîne de l'artiste, puis la plus vue. Aucun résultat sûr : None (morceau non téléchargé, retenté la fois suivante)."""
     import bibliotheque
     attendus = marqueurs(titre)
 
     def choisir(resultats, detail=None):
-        bonnes = [v for v in resultats
-                  if duree_ok(v, duree)
-                  and not marqueurs(v.get("title") or "") - attendus
-                  and bibliotheque.titre_correspond(titre, v.get("title") or "")]
+        bonnes = []
+        for v in resultats:
+            if not (duree_ok(v, duree) and not marqueurs(v.get("title") or "") - attendus
+                    and bibliotheque.titre_correspond(titre, v.get("title") or "")):
+                continue
+            officielle = meme_artiste(artiste, v.get("channel"))
+            vues = v.get("view_count")
+            if not officielle and vues is not None and vues < VUES_MIN:
+                continue   # mise en ligne confidentielle d'un inconnu : pas assez sûre
+            bonnes.append((officielle, vues or 0, v))
         if not bonnes:
             return None
-        return min(bonnes, key=lambda v: (not meme_artiste(artiste, v.get("channel")),
-                                          abs(v["duration"] - duree)))
+        # La chaîne de l'artiste d'abord, puis la plus vue
+        return max(bonnes, key=lambda b: (b[0], b[1]))[2]
     return choisir
 
 
