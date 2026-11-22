@@ -174,6 +174,7 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     try:
         codec = ["-c:a", "libmp3lame"] if ext == ".mp3" else ["-c:a", "aac"]
         copie_tags = False
+        gain0 = gain
         # Plusieurs essais : si le réencodage dépasse quand même le plafond (masters très écrêtés), on baisse le gain
         # de l'excès et on recommence, plutôt que d'abandonner. Le titre finit un peu sous la cible, sans saturer.
         for essai in range(ESSAIS_MAX):
@@ -207,7 +208,8 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
             break
         # Le limiteur peut retenir un peu de volume (au plus LIMITEUR_MAX) ; au-delà, ou au-dessus, quelque chose cloche.
         attendu = avant + gain
-        if not (attendu - (LIMITEUR_MAX if gain > 0 else 0) - 0.5 <= apres <= attendu + 1.5):
+        recale = gain < gain0   # le gain a été baissé pour tenir le plafond : le niveau final est volontairement plus bas
+        if not (attendu - (LIMITEUR_MAX if gain > 0 or recale else 0) - 0.5 <= apres <= attendu + 1.5):
             return Resultat("echec", avant=avant, apres=apres, message=f"niveau final {apres:.1f} LUFS au lieu de {avant + gain:.1f}")
         shutil.copymode(chemin, tmp)
         _copier_proprietaire(chemin, tmp)
