@@ -31,6 +31,7 @@ BITRATE = "192k"
 EXTENSIONS = (".m4a", ".mp3")
 LIMITEUR_MAX = 4.0   # dB : de combien le limiteur peut rogner les pics pour atteindre la cible
 MARGE_ENCODAGE = 1.0   # dB de marge sous le plafond pour le réencodage
+ESSAIS_MAX = 3         # réencodages possibles quand le pic final dépasse le plafond
 PIC_MAX_FINAL = -0.3   # pic d'échantillon maximal accepté après réencodage (dBFS)
 MARQUEUR = "LISSAGE_LUFS"   # tag laissé dans le fichier lissé : il n'est jamais retraité à la même cible
 
@@ -166,31 +167,42 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     os.close(fd)
     try:
         codec = ["-c:a", "libmp3lame"] if ext == ".mp3" else ["-c:a", "aac"]
-        filtre = f"volume={gain:.2f}dB"
-        # Limiteur toujours actif : il retient les pics (même quand on baisse le volume, car certains titres très
-        # compressés dépassent 0 dBFS une fois décodés) un cran sous le plafond, pour laisser de la marge au
-        # réencodage AAC/MP3, qui peut ajouter ~1 dB de dépassement.
-        filtre += f",alimiter=limit={10 ** ((pic - MARGE_ENCODAGE) / 20):.3f}:attack=3:release=40:level=0"
-        r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", filtre,
-                       "-ar", str(freq), *codec, "-b:a", BITRATE, tmp])
-        if r.returncode != 0:
-            return Resultat("echec", avant=avant, message="ffmpeg a échoué : " + (r.stderr.strip().splitlines() or ["?"])[-1])
-        _copier_tags(chemin, tmp)
-        _marquer(tmp, cible)
-        # Contrôles avant de remplacer l'original : durée identique, niveau atteint.
-        nouvelle = FichierAudio(tmp).info.length
-        if abs(nouvelle - duree) > max(1.5, duree * 0.01):
-            return Resultat("echec", avant=avant, message=f"durée anormale ({nouvelle:.1f} s au lieu de {duree:.1f} s)")
-        controle = mesurer(tmp)
-        if controle is None:
-            return Resultat("echec", avant=avant, message="résultat illisible")
-        apres = controle["i"]
+        copie_tags = False
+        # Plusieurs essais : si le réencodage dépasse quand même le plafond (masters très écrêtés), on baisse le gain
+        # de l'excès et on recommence, plutôt que d'abandonner. Le titre finit un peu sous la cible, sans saturer.
+        for essai in range(ESSAIS_MAX):
+            # Limiteur toujours actif : il retient les pics (même quand on baisse le volume, car certains titres très
+            # compressés dépassent 0 dBFS une fois décodés) un cran sous le plafond, pour laisser de la marge au
+            # réencodage AAC/MP3, qui peut ajouter ~1 dB de dépassement.
+            filtre = (f"volume={gain:.2f}dB,"
+                      f"alimiter=limit={10 ** ((pic - MARGE_ENCODAGE) / 20):.3f}:attack=3:release=40:level=0")
+            r = _executer(["-i", chemin, "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-af", filtre,
+                           "-ar", str(freq), *codec, "-b:a", BITRATE, tmp])
+            if r.returncode != 0:
+                return Resultat("echec", avant=avant, message="ffmpeg a échoué : " + (r.stderr.strip().splitlines() or ["?"])[-1])
+            if not copie_tags:
+                _copier_tags(chemin, tmp)
+                _marquer(tmp, cible)
+                copie_tags = True
+            # Contrôles avant de remplacer l'original : durée identique, niveau atteint.
+            nouvelle = FichierAudio(tmp).info.length
+            if abs(nouvelle - duree) > max(1.5, duree * 0.01):
+                return Resultat("echec", avant=avant, message=f"durée anormale ({nouvelle:.1f} s au lieu de {duree:.1f} s)")
+            controle = mesurer(tmp)
+            if controle is None:
+                return Resultat("echec", avant=avant, message="résultat illisible")
+            apres = controle["i"]
+            if controle["peak"] > PIC_MAX_FINAL:
+                if essai + 1 < ESSAIS_MAX:
+                    gain -= (controle["peak"] - PIC_MAX_FINAL) + 0.5
+                    continue
+                return Resultat("echec", avant=avant, apres=apres,
+                                message=f"pic final {controle['peak']:.1f} dBFS au-dessus du plafond")
+            break
         # Le limiteur peut retenir un peu de volume (au plus LIMITEUR_MAX) ; au-delà, ou au-dessus, quelque chose cloche.
         attendu = avant + gain
         if not (attendu - (LIMITEUR_MAX if gain > 0 else 0) - 0.5 <= apres <= attendu + 1.5):
             return Resultat("echec", avant=avant, apres=apres, message=f"niveau final {apres:.1f} LUFS au lieu de {avant + gain:.1f}")
-        if controle["peak"] > PIC_MAX_FINAL:   # saturation franche : jamais
-            return Resultat("echec", avant=avant, apres=apres, message=f"pic final {controle['peak']:.1f} dBFS au-dessus du plafond")
         shutil.copymode(chemin, tmp)
         _copier_proprietaire(chemin, tmp)
         os.replace(tmp, chemin)
