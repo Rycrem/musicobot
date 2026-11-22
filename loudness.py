@@ -31,6 +31,7 @@ BITRATE = "192k"
 EXTENSIONS = (".m4a", ".mp3")
 LIMITEUR_MAX = 4.0   # dB : de combien le limiteur peut rogner les pics pour atteindre la cible
 MARGE_ENCODAGE = 1.0   # dB de marge sous le plafond pour le réencodage
+DUREE_MAX = 1200       # s : au-delà (concerts, mix d'une heure), on ne touche pas : trop long à mesurer et à réencoder
 ESSAIS_MAX = 3         # réencodages possibles quand le pic final dépasse le plafond
 PIC_MAX_FINAL = -0.3   # pic d'échantillon maximal accepté après réencodage (dBFS)
 MARQUEUR = "LISSAGE_LUFS"   # tag laissé dans le fichier lissé : il n'est jamais retraité à la même cible
@@ -142,6 +143,11 @@ def lisser(chemin, cible=CIBLE_DEFAUT, pic=PIC_DEFAUT, appliquer=True):
     deja = marque(chemin)
     if deja is not None and abs(deja - cible) < 0.05:
         return Resultat("deja", message="déjà lissé")   # sans même mesurer : le rattrapage d'une bibliothèque est très rapide
+    try:
+        if FichierAudio(chemin).info.length > DUREE_MAX:
+            return Resultat("ignore", message="trop long (concert, mix)")
+    except Exception:  # noqa: BLE001 — on laisse la suite signaler un fichier illisible
+        pass
     try:
         m = mesurer(chemin)
     except subprocess.TimeoutExpired:
