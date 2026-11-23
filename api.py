@@ -177,7 +177,7 @@ def creer_app(bot, token, moteur, log=print):
             return _erreur("Album introuvable sur Deezer.", 404)
         artiste = (a.get("artist") or {}).get("name", "")
         nom = f"{artiste} - {a['title']}" if artiste else a["title"]
-        return await _lancer(f"album:{a['id']}", nom, lambda suivi: moteur.telecharger_album(a, suivi))
+        return await _lancer(f"album:{a['id']}", nom, partial(moteur.telecharger_album, a))
 
     async def telecharger_artiste(requete):
         corps = await _corps(requete) or {}
