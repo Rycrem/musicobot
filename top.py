@@ -98,14 +98,20 @@ def morceau(t):
     return (str(t["id"]), t["artist"]["name"], t["title"], t.get("duration"))
 
 
+POOL_ARTISTES = 25   # artistes lus chez Deezer avant de trier et de n'en garder que quelques-uns
+
+
 def chercher_artistes(nom, limite=5):
     """Artistes Deezer correspondant à `nom`, les plus pertinents d'abord : noms exacts
     (par nombre de fans), puis l'ordre de Deezer. Chaque artiste : {id, name, nb_fan,
     nb_album, picture_xl, link, …} + « nb_titres » (approximatif, None si inconnu)."""
-    res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit={limite}").get("data", [])
+    # Deezer classe par sa propre pertinence, pas par popularité : « Angèle » (1,7 M de fans) arrive 6e, derrière cinq
+    # homonymes à moins de 200 fans. On lit donc plus de résultats, on met les noms exacts en tête par nombre de fans,
+    # puis on ne garde que `limite` artistes (le nombre de titres, lent à calculer, ne l'est que pour ceux-là).
+    res = api(f"search/artist?q={urllib.parse.quote(nom)}&limit={max(limite, POOL_ARTISTES)}").get("data", [])
     exact = sorted((a for a in res if cle_titre(a["name"]) == cle_titre(nom)),
-                   key=lambda a: a.get("nb_fan", 0), reverse=True)
-    artistes = exact + [a for a in res if a not in exact]
+                   key=lambda a: a.get("nb_fan") or 0, reverse=True)
+    artistes = (exact + [a for a in res if a not in exact])[:limite]
     for a in artistes:
         try:
             a["nb_titres"] = nombre_titres(a)
@@ -132,7 +138,14 @@ def chercher_chansons(recherche, limite=5):
         groupes.setdefault(cle, []).append(t)
     demande = bool(bibliotheque.variantes(recherche) or AUTRES_VERSIONS.search(recherche))
     cles = list(groupes) if demande else sorted(groupes, key=lambda c: c[2])
-    chansons = [groupes[c][0] if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
+    voulues = bibliotheque.variantes(recherche)
+
+    def version_demandee(groupe):
+        """Un groupe d'« autres versions » (live, a cappella, instrumental…) n'est affiché qu'une fois : on y prend celle que la
+        recherche demande (« … a cappella »), sinon la première."""
+        return max(groupe, key=lambda t: len(bibliotheque.variantes(annotation(t["title"])) & voulues))
+
+    chansons = [version_demandee(groupes[c]) if c[2] else bibliotheque.meilleure_version(groupes[c]) for c in cles[:limite]]
     # Fans de l'artiste : pour distinguer l'original d'une reprise quand on ne connaît pas le groupe
     fans = {}
     for c in chansons:
@@ -144,6 +157,22 @@ def chercher_chansons(recherche, limite=5):
                 fans[id_artiste] = None
         c["fans_artiste"] = fans[id_artiste]
     return chansons
+
+
+def chercher_albums(recherche, limite=6):
+    """Albums Deezer correspondant à `recherche` (titre, avec ou sans l'artiste), dans l'ordre de pertinence de
+    Deezer. Un seul résultat par album : la version standard est préférée aux éditions deluxe, live ou remix du
+    même titre. Chaque album : {id, title, artist, cover_medium, nb_tracks, record_type, link, …}."""
+    res = api(f"search/album?q={urllib.parse.quote(recherche)}&limit={limite * 4}").get("data", [])
+    groupes = {}
+    for a in res:
+        cle = (str((a.get("artist") or {}).get("id")), cle_titre(a["title"]))
+        groupes.setdefault(cle, []).append(a)
+    albums = []
+    for groupe in groupes.values():
+        # La version sans mention d'édition passe devant ; à défaut, la première de Deezer.
+        albums.append(min(groupe, key=lambda a: (autre_version(a["title"]), bool(EDITION_BONUS.search(a["title"])))))
+    return albums[:limite]
 
 
 def nombre_titres(artiste):
@@ -475,6 +504,26 @@ def telecharger_chanson(chanson, suivi=None):
     if suivi:
         suivi.maj(titre=titre)
     return telecharger_morceaux(titre, [morceau(chanson)], suivi, f"chanson:{chanson['id']}")
+
+
+def telecharger_album(album, suivi=None):
+    """`album` = fiche Deezer d'un album (chercher_albums ou GET album/<id>). Tous ses titres, rangés dans
+    Artiste/Album avec les tags et la pochette de Deezer ; ceux déjà téléchargés sont sautés."""
+    nom_artiste = (album.get("artist") or {}).get("name", "")
+    titre = f"{nom_artiste} - {album['title']}" if nom_artiste else album["title"]
+    if suivi:
+        suivi.maj(titre=titre, etat="Lecture de l'album sur Deezer")
+    pistes = api_pages(f"album/{album['id']}/tracks?limit=200")
+    if not pistes:
+        raise RuntimeError(f"aucun titre trouvé pour l'album « {album['title']} » sur Deezer")
+    if suivi and suivi.annule:
+        return {"titre": titre, "total": len(pistes), "telechargees": 0, "ignorees": 0, "erreurs": 0,
+                "echecs": [], "index_echecs": [], "deja": 0, "annule": True}
+    morceaux = []
+    for t in pistes:
+        t.setdefault("artist", album.get("artist") or {"name": nom_artiste})   # les pistes d'album n'ont pas toujours l'artiste
+        morceaux.append(morceau(t))
+    return telecharger_morceaux(titre, morceaux, suivi, f"album:{album['id']}")
 
 
 # ---------------------------------------------------------------------------
