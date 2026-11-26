@@ -619,16 +619,25 @@ class Bot(discord.Client):
                     if r.get("non_classees"):
                         msg += (f"\n{r['non_classees']} musique(s) non reconnue(s) sur Deezer, rangée(s) dans "
                                 f"`{os.path.relpath(bibliotheque.DOSSIER_NON_CLASSES, dl.DOSSIER)}`")
+                    if r.get("perime"):
+                        msg += ("\n⚠️ Arrêté : YouTube a changé et la version de yt-dlp du bot ne sait "
+                                "plus le lire (ni les cookies ni une pause n'y changent rien). Il faut "
+                                "monter yt-dlp dans `requirements.txt` puis redémarrer : les musiques "
+                                "restantes seront retentées.")
                     if r["echecs"]:
                         liste = "\n".join(f"- {court(t, 70)}" for t in r["echecs"][:10])
                         if len(r["echecs"]) > 10:
                             liste += f"\n… et {len(r['echecs']) - 10} autre(s)"
                         msg += f"\nMusiques en erreur (sautées) :\n{liste}"
                     msg = court(msg, 1990)
-                await self.maj_annonce(
-                    tache, f"Terminé ✅ {r['telechargees']} musique(s) téléchargée(s) · "
-                           f"{deja} déjà présente(s) · {r['erreurs']} en erreur", 0x57F287,
-                    titres=r["total"])
+                if r.get("perime"):
+                    await self.maj_annonce(tache, f"Arrêté ⚠️ yt-dlp à mettre à jour · "
+                                           f"{r['telechargees']} musique(s) téléchargée(s)", 0xFEE75C)
+                else:
+                    await self.maj_annonce(
+                        tache, f"Terminé ✅ {r['telechargees']} musique(s) téléchargée(s) · "
+                               f"{deja} déjà présente(s) · {r['erreurs']} en erreur", 0x57F287,
+                        titres=r["total"])
             except Exception as e:  # noqa: BLE001
                 erreur = str(e)
                 dl.log(f"Échec sur {tache.url} : {e}")

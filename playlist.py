@@ -49,6 +49,7 @@ BLOCAGE_SEUIL = int(os.environ.get("BLOCAGE_SEUIL", "5"))   # échecs d'affilée
 BLOCAGE_PAUSE_MIN = float(os.environ.get("BLOCAGE_PAUSE_MIN", "10"))  # pause si une nouvelle session ne suffit pas
 BLOCAGE_MAX = int(os.environ.get("BLOCAGE_MAX", "6"))       # nombre max de pauses par playlist
 ROBOT_SEUIL = int(os.environ.get("ROBOT_SEUIL", "3"))       # « confirm you're not a bot » d'affilée = arrêt
+PERIME_SEUIL = 3   # échecs d'affilée « yt-dlp ne sait plus décoder YouTube » = arrêt (réessayer n'y change rien)
 # --------------------------------------------------------------------------
 
 # Vidéos déjà téléchargées (identifiants YouTube) : un seul registre pour tout le dossier music
@@ -281,6 +282,7 @@ class Journal:
         self.prefixe = prefixe
         self.suivi = suivi
         self.erreurs = []
+        self.perime = False   # yt-dlp n'a pas su résoudre le calcul de YouTube (remis à False par vidéo)
 
     def debug(self, msg):
         if not msg.startswith("[debug] "):
@@ -290,9 +292,14 @@ class Journal:
         print(f"{self.prefixe}{msg}", flush=True)
 
     def warning(self, msg):
+        if est_ytdlp_perime(msg):
+            # Une ligne au lieu de la trace Deno complète (des dizaines de lignes par vidéo)
+            self.perime = True
+            msg = msg.splitlines()[0] + " [yt-dlp à mettre à jour, détail masqué]"
         print(f"{self.prefixe}ATTENTION : {msg}", flush=True)
 
     def error(self, msg):
+        self.perime = self.perime or est_ytdlp_perime(msg)
         print(f"{self.prefixe}{msg}", flush=True)
         self.erreurs.append(msg)
 
@@ -390,6 +397,15 @@ def est_blocage_robot(message):
     l'adresse IP du NAS est bloquée, seuls des cookies de compte YouTube y remédient."""
     m = (message or "").lower().replace("\u2019", "'")
     return "confirm you're not a bot" in m or "sign in to confirm" in m
+
+
+def est_ytdlp_perime(message):
+    """YouTube a changé son lecteur et yt-dlp ne sait plus résoudre son calcul JavaScript
+    (« n challenge » / signature, exécuté par Deno) : seules les miniatures restent disponibles.
+    Ni une nouvelle session, ni une pause, ni des cookies n'y font rien : il faut une version
+    plus récente de yt-dlp (requirements.txt)."""
+    m = (message or "").lower()
+    return "challenge solving failed" in m or "signature solving failed" in m
 
 
 def url_video(entree):
@@ -584,8 +600,10 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         pauses = 0
         reessai_jusqua = -1   # musiques en cours de nouvel essai : ne relancent pas de blocage
         robot = []            # index des échecs « not a bot » consécutifs
+        perimes = []          # index des échecs consécutifs « yt-dlp à mettre à jour »
         index_ok = set()      # musiques réussies (téléchargées ou déjà présentes)
         bloque = False
+        perime = False
         annule = False
         i = 0
         while i < len(entrees):
@@ -599,6 +617,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             if SESSION_MAX and session_essais >= SESSION_MAX:
                 nouvelle_session(f"préventif, après {SESSION_MAX} musiques")
             nb_erreurs, nb_ok = len(journal.erreurs), len(telechargees)
+            journal.perime = False
             courante.update(deezer=entree.get("deezer"), categorie=entree.get("categorie"))
             try:
                 adresse = choisir_video(entree, journal) if entree.get("choisir") else url_video(entree)
@@ -630,6 +649,25 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
                     serie.append(i)
                 if suivi:
                     suivi.maj(erreurs=len(echecs))
+                # yt-dlp trop ancien pour le YouTube du moment : inutile d'insister
+                if journal.perime:
+                    perimes.append(i)
+                    if len(perimes) >= PERIME_SEUIL:
+                        for j in perimes:   # pas de vrais échecs : elles seront retentées
+                            echecs.pop(entrees[j].get("id") or j, None)
+                        perime = True
+                        log(f"[{titre}] yt-dlp {yt_dlp.version.__version__} ne sait plus décoder YouTube "
+                            f"(calcul du lecteur en échec, seules les miniatures sont disponibles) : arrêt "
+                            f"({i + 1 - len(perimes)}/{len(entrees)} traitées). Ni les cookies ni une pause "
+                            f"n'y changent rien : monte la version de yt-dlp dans requirements.txt "
+                            f"(https://pypi.org/project/yt-dlp/) puis redémarre. Les musiques restantes "
+                            f"seront retentées.")
+                        if suivi:
+                            suivi.maj(erreurs=len(echecs), etat="yt-dlp à mettre à jour")
+                        break
+                    i += 1
+                    continue
+                perimes = []
                 # Blocage anti-robot : inutile d'insister (nouvelle session / pause n'y font rien)
                 if est_blocage_robot(journal.erreurs[-1]):
                     robot.append(i)
@@ -680,6 +718,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             else:
                 serie = []
                 robot = []
+                perimes = []
                 index_ok.add(i)
                 if entree.get("id") in telechargees:
                     session_neuve = False
@@ -713,6 +752,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
         "echecs": echecs,
         "index_echecs": index_echecs,
         "bloque": bloque,
+        "perime": perime,   # arrêt : yt-dlp à mettre à jour
         "annule": annule,
         "index_ok": sorted(index_ok),
     }
