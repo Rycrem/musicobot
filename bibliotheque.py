@@ -413,7 +413,19 @@ def deplacer(chemin, cible):
         os.remove(chemin)
         return False
     os.makedirs(os.path.dirname(cible), exist_ok=True)
-    shutil.move(chemin, cible)
+    try:
+        os.rename(chemin, cible)   # même volume : instantané et atomique
+    except OSError:
+        # Autre volume (le dossier d'attente est hors de la bibliothèque) : on copie vers un fichier caché, puis on le
+        # renomme, pour que l'indexeur ne voie jamais une musique à moitié copiée.
+        partiel = os.path.join(os.path.dirname(cible), f".{os.path.basename(cible)}.part")
+        try:
+            shutil.copy2(chemin, partiel)
+            os.replace(partiel, cible)
+        finally:
+            if os.path.exists(partiel):
+                os.remove(partiel)
+        os.remove(chemin)
     return True
 
 
@@ -456,12 +468,38 @@ dl.RANGEMENT = ranger_telechargement
 # Registres : un seul pour toute la bibliothèque
 # ---------------------------------------------------------------------------
 def dossiers_parcourus():
-    """(racine, noms de fichiers) de la bibliothèque, sans les dossiers système ni cachés
-    (sauf le dossier des téléchargements en cours)."""
+    """(racine, noms de fichiers) de la bibliothèque, sans les dossiers système ni cachés, mais avec les dossiers des
+    téléchargements en cours : /ranger y range les musiques restées après un téléchargement interrompu."""
+    attentes = {os.path.abspath(dl.DOSSIER_ATTENTE), os.path.abspath(dl.DOSSIER_ATTENTE_ANCIEN)}
     for racine, dossiers, noms in os.walk(dl.DOSSIER):
         dossiers[:] = [d for d in dossiers if d not in DOSSIERS_IGNORES
-                       and (not d.startswith(".") or os.path.join(racine, d) == dl.DOSSIER_ATTENTE)]
+                       and (not d.startswith(".") or os.path.abspath(os.path.join(racine, d)) in attentes)]
         yield racine, noms
+    attente = os.path.abspath(dl.DOSSIER_ATTENTE)
+    if not attente.startswith(os.path.abspath(dl.DOSSIER) + os.sep) and os.path.isdir(attente):
+        for racine, _, noms in os.walk(attente):   # hors de la bibliothèque : pas parcouru plus haut
+            yield racine, noms
+
+
+def controler_dossiers_attente():
+    """Au démarrage : signale les musiques restées dans un dossier d'attente (téléchargement interrompu : /ranger les
+    range) et supprime l'ancien dossier `.telechargement` de la bibliothèque s'il est vide, pour qu'il n'y apparaisse
+    plus (Audio Station en faisait un faux album)."""
+    dl.log(f"Dossier d'attente des téléchargements : {dl.DOSSIER_ATTENTE}")
+    for dossier in dict.fromkeys((dl.DOSSIER_ATTENTE, dl.DOSSIER_ATTENTE_ANCIEN)):
+        if not os.path.isdir(dossier):
+            continue
+        restes = [n for _, _, noms in os.walk(dossier) for n in noms if n.lower().endswith(EXTENSIONS)]
+        if restes:
+            dl.log(f"ATTENTION : {len(restes)} musique(s) restée(s) dans {dossier} (téléchargement interrompu) : "
+                   "lance /ranger pour les ranger.")
+    ancien = dl.DOSSIER_ATTENTE_ANCIEN
+    if os.path.abspath(ancien) != os.path.abspath(dl.DOSSIER_ATTENTE) and os.path.isdir(ancien):
+        try:
+            os.rmdir(ancien)   # seulement s'il est vide
+            dl.log(f"Ancien dossier d'attente vide supprimé : {ancien}")
+        except OSError:
+            pass
 
 
 def migrer_registres():
