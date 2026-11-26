@@ -1114,6 +1114,7 @@ def enregistrer_commandes(bot: Bot):
 if __name__ == "__main__":
     dl.verifier_dossier()
     bibliotheque.migrer_registres()
+    bibliotheque.controler_dossiers_attente()
     configuration = attendre_config()
     bot = Bot(configuration)
     enregistrer_commandes(bot)

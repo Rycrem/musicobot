@@ -54,8 +54,26 @@ PERIME_SEUIL = 3   # échecs d'affilée « yt-dlp ne sait plus décoder YouTube 
 
 # Vidéos déjà téléchargées (identifiants YouTube) : un seul registre pour tout le dossier music
 ARCHIVE = os.path.join(DOSSIER, ".deja_telecharges.txt")
-# Téléchargements en cours, avant leur rangement par artiste / album
-DOSSIER_ATTENTE = os.path.join(DOSSIER, ".telechargement")
+# Téléchargements en cours, avant leur rangement par artiste / album.
+# Hors de la bibliothèque : dans le dossier music, Audio Station (ou Plex…) les indexe pendant le téléchargement et
+# en fait un faux album « .telechargement », qui peut rester affiché après le rangement.
+DOSSIER_ATTENTE_ANCIEN = os.path.join(DOSSIER, ".telechargement")
+
+
+def choisir_dossier_attente(env=None):
+    """`DOSSIER_ATTENTE` s'il est renseigné ; sinon `attente` dans le dossier de configuration (monté à côté du
+    dossier music, donc jamais indexé) si on peut y écrire ; sinon l'ancien emplacement, dans le dossier music."""
+    env = os.environ if env is None else env
+    choisi = env.get("DOSSIER_ATTENTE", "").strip()
+    if choisi:
+        return choisi
+    config = os.path.dirname(FICHIER_PLAYLISTS) or "/config"
+    if os.path.isdir(config) and os.access(config, os.W_OK | os.X_OK):
+        return os.path.join(config, "attente")
+    return DOSSIER_ATTENTE_ANCIEN
+
+
+DOSSIER_ATTENTE = choisir_dossier_attente()
 # fonction(chemin, info, deezer_id, categorie) -> {chemin, nouveau, classee}, appelée après chaque musique
 # téléchargée pour la ranger par artiste / album (définie par bibliotheque.py)
 RANGEMENT = None
