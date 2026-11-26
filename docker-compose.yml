@@ -21,6 +21,7 @@ x-reglages: &reglages
   CIBLE_LUFS: "-14"          # niveau visé par le lissage (-14 = YouTube / Spotify ; -16 = plus doux)
   SEULEMENT_MA_CHAINE: "0"   # 0 = télécharge toutes les vidéos ; 1 = seulement celles de ta chaîne
   TZ: Europe/Paris
+  # DOSSIER_ATTENTE: /config/attente   # téléchargements en cours (défaut : config/attente, hors de la bibliothèque)
   PAUSE_REQUETES: "0"        # pause en secondes entre les requêtes YouTube (monte à 1 si YouTube bloque)
   PAUSE_VIDEOS: "0"          # pause (s) avant chaque musique (0 = aucune)
   SESSION_MAX: "300"         # nouvelle session YouTube toutes les 300 musiques

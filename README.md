@@ -104,9 +104,17 @@ résultat est contrôlé (durée, niveau) avant de remplacer l'original ; au moi
 |---|---|
 | `config/bot.conf` | Token Discord, ID du serveur, personnes et salons autorisés, salon d'annonce du top. **Jamais versionné.** |
 | `docker-compose.yml` | Chemin du dossier music et réglages : format (`m4a`/`mp3`/`mp4`), heure du top (`TOP_HEURE`), fréquence de vérification des playlists (`VERIF_HEURES`)… |
+| `config/attente/` | Téléchargements en cours, avant leur rangement. Créé et vidé par le bot (voir [Dossier d'attente](#dossier-dattente)). |
 | `config/cookies.txt` | Optionnel : cookies d'un compte YouTube si YouTube bloque le NAS (« Sign in to confirm you're not a bot »). **Jamais versionné.** |
 
 Les fichiers de `config/` qui contiennent des secrets ou des données locales sont exclus par le [`.gitignore`](.gitignore).
+
+### Dossier d'attente
+
+Pendant un téléchargement, la musique est d'abord écrite dans un dossier d'attente, puis rangée par artiste et album une fois ses tags écrits. Ce dossier est **hors de la bibliothèque** : par défaut `config/attente/` (à côté de `bot.conf`). Dans le dossier music, Audio Station (ou Plex, Jellyfin…) l'indexait pendant le téléchargement et affichait un faux album « .telechargement », parfois avec des fichiers incomplets.
+
+- Pour le placer ailleurs, renseigne `DOSSIER_ATTENTE` dans `docker-compose.yml` (chemin dans le conteneur). Si `config/` n'est pas utilisable, le bot retombe sur l'ancien emplacement, `music/.telechargement`.
+- Au démarrage, le bot supprime l'ancien dossier `music/.telechargement` s'il est vide. S'il contient encore des musiques (téléchargement interrompu), il le signale dans les journaux : **`/ranger`** les range. Pense ensuite à relancer l'indexation d'Audio Station (Panneau de configuration → Service d'indexation) pour effacer l'ancien faux album.
 
 ## Organisation des musiques
 
