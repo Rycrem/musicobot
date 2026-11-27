@@ -40,6 +40,7 @@ import discord
 from discord import app_commands
 
 import api
+import reprise as file_reprise   # reprise de la file après un redémarrage
 import bibliotheque   # noqa: F401 — range chaque musique téléchargée par artiste / album
 import playlist as dl
 import top
@@ -47,6 +48,7 @@ import top
 CHEMIN_CONFIG = os.environ.get("BOT_CONFIG", "/config/bot.conf")
 INTERVALLE_DIRECT = max(3, int(os.environ.get("INTERVALLE_DIRECT", "5")))  # s entre 2 mises à jour de /update
 FICHIER_SUIVIES = os.environ.get("FICHIER_SUIVIES", "/config/playlists_suivies.json")
+FICHIER_FILE = os.environ.get("FICHIER_FILE", "/config/file_attente.json")   # file reprise après un redémarrage
 VERIF_HEURES = max(0.25, float(os.environ.get("VERIF_HEURES", "6")))   # vérification auto des playlists suivies
 PAUSE_ROBOT_HEURES = float(os.environ.get("PAUSE_ROBOT_HEURES", "3"))  # pause si YouTube bloque (anti-robot)
 TOP_HEURE = os.environ.get("TOP_HEURE", "21:00").strip()   # heure du top du jour ("" = désactivé)
@@ -186,6 +188,7 @@ class Tache:
     annonce: object = None  # message public avec la photo de l'artiste (/artiste)
     nom: str = ""           # nom lisible (artiste, top…) affiché dans /update
     embed: object = None    # embed de cette annonce, mis à jour à la fin
+    reprises: int = 0       # fois où elle a été reprise après un redémarrage alors qu'elle était en cours
 
 
 class Bot(discord.Client):
@@ -223,6 +226,7 @@ class Bot(discord.Client):
             await self.tree.sync(guild=serveur)
         else:               # commandes globales : jusqu'à 1 h avant d'apparaître
             await self.tree.sync()
+        self.reprendre_file()
         self._travailleur = asyncio.create_task(self.travailleur())
         self._verif = asyncio.create_task(self.boucle_verif())
         if TOP_HEURE:
@@ -272,6 +276,29 @@ class Bot(discord.Client):
     def taches(self):
         return ([self.en_cours] if self.en_cours else []) + self.attente
 
+    def sauver_file(self):
+        """Écrit la file sur disque pour la reprendre si le bot redémarre (voir reprise.py)."""
+        try:
+            file_reprise.ecrire(FICHIER_FILE, file_reprise.entrees(self.taches(), self.en_cours))
+        except OSError as e:
+            dl.log(f"Écriture de {FICHIER_FILE} impossible : {e}")
+
+    def reprendre_file(self):
+        """Au démarrage : remet dans la file ce qui s'y trouvait à l'arrêt du bot."""
+        reprises = file_reprise.a_reprendre(file_reprise.lire(FICHIER_FILE), dl.log)
+        for e, n in reprises:
+            action = file_reprise.reconstruire(e["action"], top)
+            if action is False:
+                dl.log(f"Reprise impossible (action inconnue) : {e.get('nom') or e['url']}")
+                continue
+            self.attente.append(Tache(next(self.numeros), e["url"], int(e.get("auteur_id") or 0), None,
+                                      dl.Suivi(e["url"]), bool(e.get("auto")), action,
+                                      nom=e.get("nom") or "", reprises=n))
+        if self.attente:
+            dl.log(f"Reprise de la file : {len(self.attente)} téléchargement(s) interrompu(s) par l'arrêt du bot.")
+            self.reveil.set()
+        self.sauver_file()
+
     @staticmethod
     def nom_tache(tache):
         return tache.suivi.photo()["titre"] or tache.nom or tache.url
@@ -285,6 +312,7 @@ class Bot(discord.Client):
         tache = Tache(next(self.numeros), url, auteur_id, salon, dl.Suivi(url), auto, action,
                       inter, time.time() if inter else 0.0)
         self.attente.append(tache)
+        self.sauver_file()
         self.reveil.set()
         return len(taches), tache
 
@@ -294,6 +322,7 @@ class Bot(discord.Client):
         (la musique en cours est interrompue). Renvoie un texte pour l'utilisateur."""
         if tache in self.attente:
             self.attente.remove(tache)
+            self.sauver_file()
             await self.maj_annonce(tache, "Annulé avant le début du téléchargement.", 0xED4245)
             return "Téléchargement annulé (il n'avait pas encore commencé)."
         if tache is self.en_cours:
@@ -561,6 +590,7 @@ class Bot(discord.Client):
                     continue
             tache = self.attente.pop(0)
             self.en_cours = tache
+            self.sauver_file()   # marquée « en cours » : si le bot s'arrête ici, la reprise compte une tentative
             msg = resultat = erreur = None
             try:
                 # Processus séparé : yt-dlp ne peut pas figer le bot (voir dl.executer_isole)
@@ -573,6 +603,7 @@ class Bot(discord.Client):
                     self.en_cours = None
                     reprise = replace(tache, numero=next(self.numeros), suivi=dl.Suivi(tache.url))
                     self.attente.insert(0, reprise)
+                    self.sauver_file()
                     if tache.annonce is not None:   # le ❌ / bouton visent maintenant la reprise
                         self.annonces[tache.annonce.id] = reprise
                     self.pause_jusqua = time.time() + PAUSE_ROBOT_HEURES * 3600
@@ -646,6 +677,7 @@ class Bot(discord.Client):
                 await self.maj_annonce(tache, f"Échec : {court(str(e), 200)}", 0xED4245)
             finally:
                 self.en_cours = None
+                self.sauver_file()
                 self.noter_fin(tache, resultat, erreur)
             if msg:
                 await self.prevenir(tache, msg)
