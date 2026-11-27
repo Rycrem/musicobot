@@ -143,6 +143,7 @@ def creer_app(bot, token, moteur, log=print):
         if position is None:
             return _erreur("Déjà en cours ou dans la file.", 409)
         tache.nom = nom
+        getattr(bot, "sauver_file", lambda: None)()   # le nom lisible fait partie de la file reprise
         return _json({"numero": tache.numero, "nom": nom, "position": position}, 202)
 
     async def _fiche_deezer(chemin, id_):

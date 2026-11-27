@@ -166,7 +166,8 @@ Mise à jour : 4d18dda -> 635af0f
   635af0f Nouvelle commande /radio
 ```
 
-- **Tes fichiers ne sont jamais écrasés** : `config/bot.conf`, `cookies.txt`, `playlists_suivies.json` et les registres `.deja_telecharges*` sont ignorés par git. Si un fichier du projet a été modifié à la main sur le NAS et que la mise à jour le touche, elle est annulée (rien n'est écrasé) et les journaux l'indiquent.
+- **Reprise après un redémarrage** : la file de téléchargement (en cours et en attente) est écrite dans `config/file_attente.json` à chaque changement et relue au démarrage ; les musiques déjà téléchargées sont sautées, la reprise continue là où elle s'était arrêtée. Une tâche qui tournait au moment de l'arrêt est reprise 3 fois au plus (si c'est elle qui fait tomber le bot, on ne boucle pas). `/ranger` n'est pas repris : relance-le. Le fichier est ignoré par git ; supprime-le pour repartir d'une file vide.
+- **Tes fichiers ne sont jamais écrasés** : `config/bot.conf`, `cookies.txt`, `playlists_suivies.json`, `file_attente.json` et les registres `.deja_telecharges*` sont ignorés par git. Si un fichier du projet a été modifié à la main sur le NAS et que la mise à jour le touche, elle est annulée (rien n'est écrasé) et les journaux l'indiquent.
 - **Nouvelle version de yt-dlp ou discord.py** (`requirements.txt`) : installée automatiquement au démarrage.
 - **Changement du `Dockerfile`** (rare : ffmpeg, Deno, Python) : les journaux affichent « reconstruis le projet ». Dans UGOS → *Projet* → *yt-music* → reconstruire, ou en SSH :
   ```bash
