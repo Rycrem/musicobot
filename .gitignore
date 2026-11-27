@@ -4,6 +4,7 @@ config/cookies.txt
 
 # Données locales créées par le bot
 config/playlists_suivies.json
+config/file_attente.json
 config/attente/
 .deja_telecharges*.txt
 
