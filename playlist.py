@@ -435,6 +435,13 @@ class AucuneVideo(RuntimeError):
     """Aucun résultat de recherche ne correspond : ce n'est pas un blocage de YouTube."""
 
 
+def doit_choisir(entree):
+    """Vrai si l'entrée est une recherche dont il faut choisir UN résultat (clé « choisir », ou « recherches »
+    pour YouTube Music d'abord) ; sinon son URL est téléchargée telle quelle. Oublier « recherches » faisait
+    télécharger les 5 résultats de chaque recherche."""
+    return bool(entree.get("choisir") or entree.get("recherches"))
+
+
 def choisir_video(entree, journal):
     """Recherches « ytsearchN:… » / YouTube Music : URL du résultat désigné par entree["choisir"]
     (ex. celui qui a la durée du morceau Deezer).
@@ -638,7 +645,7 @@ def telecharger(url, suivi=None, entrees=None, titre=None, dossier=None):
             journal.perime = False
             courante.update(deezer=entree.get("deezer"), categorie=entree.get("categorie"))
             try:
-                adresse = choisir_video(entree, journal) if entree.get("choisir") else url_video(entree)
+                adresse = choisir_video(entree, journal) if doit_choisir(entree) else url_video(entree)
                 if adresse:
                     ydl.extract_info(adresse, download=True)
             except AucuneVideo as e:
