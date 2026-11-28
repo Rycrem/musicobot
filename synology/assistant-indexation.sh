@@ -42,8 +42,18 @@ if ! nas "echo connecté sur \$(hostname)"; then
 fi
 
 etape "2/6  Dossiers"
-demander "Dossier du projet yt-music sur le NAS" "/volume1/homes/$UTIL/docker/yt-music"
-PROJET=$REPONSE
+PROJET_DEFAUT="/volume1/homes/$UTIL/docker/yt-music"
+while :; do
+    demander "Dossier du projet yt-music sur le NAS" "$PROJET_DEFAUT"
+    PROJET=$REPONSE
+    nas "test -d '$PROJET'" >/dev/null 2>&1 && break
+    ko "Dossier inaccessible : $PROJET"
+    echo "  Diagnostic (vu de ton compte SSH) :"
+    nas "id; echo; ls -ld /volume1/homes /volume1/homes/$UTIL '$PROJET' 2>&1; echo; echo 'Dossiers yt-music trouvés :'; find /volume1 -maxdepth 6 -type d -name yt-music 2>/dev/null" | sed 's/^/    /'
+    echo "  Si le dossier est listé ci-dessus, saisis son chemin. Si « Permission denied » : ton compte SSH n'a pas le droit"
+    echo "  d'entrer dans ce dossier (voir le message de l'assistant), ou utilise un compte administrateur DSM."
+    PROJET_DEFAUT=""
+done
 demander "Dossier de la musique sur le NAS" "/volume1/music"
 MUSIC=$REPONSE
 LISTE="$PROJET/config/a_indexer.txt"
@@ -52,7 +62,7 @@ SCRIPT="$PROJET/synology/indexer.sh"
 verifier() {   # verifier "description" "test shell distant" "conseil si absent"
     if nas "$2" >/dev/null 2>&1; then ok "$1"; return 0; else ko "$1 — $3"; return 1; fi
 }
-verifier "Dossier du projet : $PROJET" "test -d '$PROJET'" "mauvais chemin ?" || exit 1
+ok "Dossier du projet : $PROJET"
 verifier "Dossier config du bot" "test -d '$PROJET/config'" "le bot a-t-il déjà démarré une fois ?"
 verifier "Dossier de la musique : $MUSIC" "test -d '$MUSIC'" "mauvais chemin ? (ls /volume1)"
 verifier "Script d'indexation : $SCRIPT" "test -f '$SCRIPT'" "redémarre le conteneur yt-music pour qu'il récupère la dernière version, puis relance l'assistant"
