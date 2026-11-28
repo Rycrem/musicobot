@@ -140,6 +140,16 @@ music/
 - **`/ranger`** fait la même chose pour les musiques déjà sur le NAS (anciens dossiers `Titres/`, `Top du jour/`, `Artistes/`, playlists…). Les musiques non reconnues restent à leur place et sont listées ; les dossiers vidés sont supprimés. À lancer une fois après la mise à jour, puis quand tu veux.
 - Les registres des musiques déjà téléchargées sont communs à toute la bibliothèque (`music/.deja_telecharges*.txt`) ; ceux des anciens dossiers y sont repris automatiquement au démarrage.
 
+### Indexation immédiate dans Audio Station
+
+Le bot écrit directement dans le dossier music : Audio Station ne voit les nouveautés qu'à sa réindexation planifiée (minuit). Un conteneur ne peut pas appeler `synoindex` ; le bot note donc chaque nouveau fichier dans `config/a_indexer.txt` (variable `FICHIER_INDEX`, vide pour désactiver), et une tâche planifiée DSM les indexe chaque minute :
+
+1. DSM > Panneau de configuration > Planificateur de tâches > Créer > Tâche planifiée > Script défini par l'utilisateur.
+2. Utilisateur `root`, planification : toutes les minutes.
+3. Commande : `sh /volume1/<dossier du projet>/synology/indexer.sh`. Si tes dossiers ne sont pas `/volume1/homes/Maxime/docker/yt-music/config` (liste) et `/volume1/music` (bibliothèque), passe-les en variables : `LISTE=… MUSIC=… sh …/indexer.sh`.
+
+Sans cette tâche, rien ne change : les titres apparaissent à la réindexation de minuit.
+
 ## Structure du projet
 
 | Fichier | Rôle |
@@ -150,6 +160,7 @@ music/
 | `api.py` | API HTTP facultative (application mobile), testée dans `tests/` |
 | `bibliotheque.py` | Reconnaissance sur Deezer, tags (mutagen) et rangement par artiste / album, `/ranger` |
 | `loudness.py`, `normaliser_bibliotheque.py` | Lissage du volume (ffmpeg ebur128) : à chaque téléchargement si `NORMALISER=1`, ou sur toute la bibliothèque avec le script |
+| `indexation.py`, `synology/indexer.sh` | Indexation immédiate dans Audio Station (voir ci-dessous) |
 | `Dockerfile` | Image Python 3.12 + ffmpeg + Deno + git + yt-dlp + discord.py |
 | `entrypoint.sh` | Démarrage avec le propriétaire du dossier music (droits des fichiers) |
 | `maj-code.sh` | Mise à jour depuis GitHub à chaque démarrage du conteneur |
