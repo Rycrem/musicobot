@@ -20,7 +20,7 @@ ok()    { printf '  \033[32m✔\033[0m %s\n' "$1"; }
 ko()    { printf '  \033[31m✘\033[0m %s\n' "$1"; }
 attendre() { printf '\n(Entrée pour continuer) '; read -r _; }
 
-etape "1/6  Connexion au NAS"
+etape "1/5  Connexion au NAS"
 demander "Adresse du NAS (IP ou nom, ex. 192.168.1.20)" ""
 HOTE=$REPONSE
 [ -n "$HOTE" ] || { echo "Adresse obligatoire."; exit 1; }
@@ -41,49 +41,32 @@ if ! nas "echo connecté sur \$(hostname)"; then
     exit 1
 fi
 
-etape "2/6  Dossiers"
-PROJET_DEFAUT="/volume1/homes/$UTIL/docker/yt-music"
-while :; do
-    demander "Dossier du projet yt-music sur le NAS" "$PROJET_DEFAUT"
-    PROJET=$REPONSE
-    nas "test -d '$PROJET'" >/dev/null 2>&1 && break
-    ko "Dossier inaccessible : $PROJET"
-    echo "  Diagnostic (vu de ton compte SSH) :"
-    nas "id; echo; ls -ld /volume1/homes /volume1/homes/$UTIL '$PROJET' 2>&1; echo; echo 'Dossiers yt-music trouvés :'; find /volume1 -maxdepth 6 -type d -name yt-music 2>/dev/null" | sed 's/^/    /'
-    echo "  Si le dossier est listé ci-dessus, saisis son chemin. Si « Permission denied » : ton compte SSH n'a pas le droit"
-    echo "  d'entrer dans ce dossier (voir le message de l'assistant), ou utilise un compte administrateur DSM."
-    PROJET_DEFAUT=""
-done
+etape "2/5  Dossiers"
+demander "Dossier du projet yt-music sur le NAS" "/volume1/homes/$UTIL/docker/yt-music"
+PROJET=$REPONSE
 demander "Dossier de la musique sur le NAS" "/volume1/music"
 MUSIC=$REPONSE
 LISTE="$PROJET/config/a_indexer.txt"
 SCRIPT="$PROJET/synology/indexer.sh"
 
-verifier() {   # verifier "description" "test shell distant" "conseil si absent"
-    if nas "$2" >/dev/null 2>&1; then ok "$1"; return 0; else ko "$1 — $3"; return 1; fi
-}
-ok "Dossier du projet : $PROJET"
-verifier "Dossier config du bot" "test -d '$PROJET/config'" "le bot a-t-il déjà démarré une fois ?"
-verifier "Dossier de la musique : $MUSIC" "test -d '$MUSIC'" "mauvais chemin ? (ls /volume1)"
-verifier "Script d'indexation : $SCRIPT" "test -f '$SCRIPT'" "redémarre le conteneur yt-music pour qu'il récupère la dernière version, puis relance l'assistant"
-verifier "synoindex disponible" "test -x /usr/syno/bin/synoindex" "ce NAS n'est pas un Synology ?"
+etape "3/5  Vérifications (en root : /volume1/homes n'est lisible que par root)"
+echo "  Ton mot de passe DSM est redemandé pour sudo."
+# Un seul sudo pour tout vérifier : un nouveau terminal distant ne partage pas le cache de sudo.
+nas_tty "sudo sh -c '
+t() { if eval \"\$2\"; then echo \"  OK      \$1\"; else echo \"  MANQUE  \$1 — \$3\"; fi; }
+t \"Dossier du projet : $PROJET\" \"test -d $PROJET\" \"mauvais chemin ?\"
+t \"Dossier config du bot\" \"test -d $PROJET/config\" \"le bot a-t-il déjà démarré ?\"
+t \"Dossier de la musique : $MUSIC\" \"test -d $MUSIC\" \"mauvais chemin ? (ls /volume1)\"
+t \"Script d indexation : $SCRIPT\" \"test -f $SCRIPT\" \"redémarre le conteneur yt-music (mise à jour du bot), puis relance l assistant\"
+t \"synoindex disponible\" \"test -x /usr/syno/bin/synoindex\" \"ce NAS n est pas un Synology ?\"
+echo
+echo \"  Version du bot :\"; (cd $PROJET && git log --oneline -1 2>&1) | sed \"s/^/    /\"
+echo
+echo \"  Liste des fichiers à indexer ($LISTE) :\"
+if [ -s $LISTE ]; then tail -5 $LISTE | sed \"s/^/    /\"; elif [ -e $LISTE ]; then echo \"    vide : tout est indexé (ou aucun téléchargement depuis la mise à jour)\"; else echo \"    absente : normal tant qu aucun titre n a été téléchargé depuis la mise à jour\"; fi
+'"
 
-etape "3/6  Version du bot"
-nas "cd '$PROJET' && git log --oneline -1 2>/dev/null" || ko "git illisible dans $PROJET"
-echo "  (la liste de fichiers à indexer n'existe que depuis la PR #25 « Indexation immédiate »)"
-
-etape "4/6  Liste des fichiers à indexer"
-if nas "test -s '$LISTE'"; then
-    echo "  $LISTE contient :"
-    nas "tail -5 '$LISTE'" | sed 's/^/    /'
-    echo "  (elle se vide à chaque passage de la tâche planifiée)"
-elif nas "test -e '$LISTE'"; then
-    ok "La liste existe et est vide : tout a été indexé, ou aucun téléchargement depuis."
-else
-    echo "  Pas de liste pour l'instant : normal tant qu'aucun titre n'a été téléchargé depuis la mise à jour."
-fi
-
-etape "5/6  Test de l'indexation (facultatif)"
+etape "4/5  Test de l'indexation (facultatif)"
 echo "  Indique un fichier musique du NAS qui n'apparaît pas encore dans l'app (chemin complet vu du NAS,"
 echo "  ex. $MUSIC/Artiste/Album/01 - Titre.m4a). Ta session demandera ton mot de passe pour sudo."
 demander "Fichier à indexer (vide = passer)" ""
@@ -98,7 +81,7 @@ if [ -n "$REPONSE" ]; then
     fi
 fi
 
-etape "6/6  Tâche planifiée DSM"
+etape "5/5  Tâche planifiée DSM"
 VARIABLES=""   # le script a des chemins par défaut : on ne les précise que s'ils diffèrent
 [ "$MUSIC" = "/volume1/music" ] || VARIABLES="MUSIC=$MUSIC"
 [ "$LISTE" = "/volume1/homes/Maxime/docker/yt-music/config/a_indexer.txt" ] || VARIABLES="LISTE=$LISTE $VARIABLES"
