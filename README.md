@@ -148,6 +148,8 @@ Le bot écrit directement dans le dossier music : Audio Station ne voit les nouv
 2. Utilisateur `root`, planification : toutes les minutes.
 3. Commande : `sh /volume1/<dossier du projet>/synology/indexer.sh`. Si tes dossiers ne sont pas `/volume1/homes/Maxime/docker/yt-music/config` (liste) et `/volume1/music` (bibliothèque), passe-les en variables : `LISTE=… MUSIC=… sh …/indexer.sh`.
 
+Un assistant interactif, à lancer depuis ton Mac, vérifie le NAS en SSH, teste `synoindex` et affiche la commande exacte à saisir : `sh synology/assistant-indexation.sh`.
+
 Sans cette tâche, rien ne change : les titres apparaissent à la réindexation de minuit.
 
 ## Structure du projet
