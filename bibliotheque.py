@@ -24,6 +24,7 @@ from mutagen import File as FichierAudio
 from mutagen.id3 import APIC, ID3, ID3NoHeaderError, TALB, TCON, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK, TXXX
 from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 
+import indexation
 import playlist as dl
 import top
 
@@ -426,6 +427,7 @@ def deplacer(chemin, cible):
             if os.path.exists(partiel):
                 os.remove(partiel)
         os.remove(chemin)
+    indexation.signaler(cible)   # Audio Station ne verrait ce fichier qu'à la réindexation de minuit
     return True
 
 
